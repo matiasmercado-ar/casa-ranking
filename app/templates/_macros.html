@@ -1,0 +1,22 @@
+{% macro score_badge(value, big=false) -%}
+  {%- if value is none -%}<span class="badge none{% if big %} big{% endif %}">–</span>
+  {%- else -%}<span class="badge{% if big %} big{% endif %}" style="--s: {{ value }}">{{ '%.1f'|format(value) }}</span>{%- endif -%}
+{%- endmacro %}
+
+{% macro bar(label, value) -%}
+<div class="bar">
+  <span class="bar-label">{{ label }}</span>
+  <span class="bar-track"><span class="bar-fill" style="width: {{ (value or 0) * 10 }}%"></span></span>
+  <span class="bar-val">{{ '%.1f'|format(value) if value is not none else '–' }}</span>
+</div>
+{%- endmacro %}
+
+{% macro chip(t, f, value) -%}
+<span class="chip {{ 'yes' if value == 1 else 'no' if value == 0 else 'unk' }}" title="{{ t(f) }}">
+  {{- '✓' if value == 1 else '✗' if value == 0 else '?' }} {{ t('short_' ~ f) -}}
+</span>
+{%- endmacro %}
+
+{% macro price(h) -%}
+{%- if h.price is not none %}{{ h.currency }} {{ '{:,.0f}'.format(h.price).replace(',', '.') }}{% endif -%}
+{%- endmacro %}

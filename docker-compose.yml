@@ -1,0 +1,13 @@
+services:
+  casa-ranking:
+    build: .
+    image: ghcr.io/matiasmercado-ar/casa-ranking:latest
+    container_name: casa-ranking
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:8000"
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./data:/data

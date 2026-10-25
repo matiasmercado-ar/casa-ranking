@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="{{ lang }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#b4532a">
+  <title>{% block title %}{{ t('app_name') }}{% endblock %}</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css?v={{ version }}">
+  <script src="/static/app.js?v={{ version }}" defer></script>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/"><img src="/static/favicon.svg" alt="" width="28" height="28"><span>{{ t('app_name') }}</span></a>
+  {% if path != "/login" %}<nav class="nav">
+    <a href="/" {% if path == '/' %}aria-current="page"{% endif %}>{{ t('nav_ranking') }}</a>
+    <a href="/compare" {% if path == '/compare' %}aria-current="page"{% endif %}>{{ t('nav_compare') }}</a>
+    <a href="/settings" {% if path == '/settings' %}aria-current="page"{% endif %}>{{ t('nav_settings') }}</a>
+  </nav>{% endif %}
+  <div class="topbar-end">
+    <div class="lang" role="group" aria-label="{{ t('language') }}">
+      {% for l in langs %}<a href="/lang/{{ l }}?next={{ path }}" {% if l == lang %}aria-current="true"{% endif %}>{{ l|upper }}</a>{% endfor %}
+    </div>
+    {% if auth_enabled %}<form method="post" action="/logout"><button class="btn ghost small">{{ t('logout') }}</button></form>{% endif %}
+  </div>
+</header>
+<main class="wrap">
+{% block content %}{% endblock %}
+</main>
+<footer class="foot">Casa Ranking v{{ version }}</footer>
+</body>
+</html>

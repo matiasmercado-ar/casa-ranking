@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ t('nav_settings') }}</h1>
+
+<form class="panel form" method="post" action="/settings/raters">
+  <h2>{{ t('raters') }}</h2>
+  <p class="muted small">{{ t('raters_hint') }}</p>
+  {% for r in raters %}
+  <div class="row center">
+    <input class="grow" type="text" name="name_{{ r.id }}" value="{{ r.name }}" maxlength="40" aria-label="{{ t('new_rater_placeholder') }}">
+    <label class="inline small"><input type="checkbox" name="remove_{{ r.id }}"> {{ t('delete') }}</label>
+  </div>
+  {% endfor %}
+  <div class="row center">
+    <input class="grow" type="text" name="new_name" placeholder="＋ {{ t('add_rater') }}" maxlength="40">
+  </div>
+  <div class="actions"><button class="btn primary">{{ t('save') }}</button></div>
+</form>
+
+<form class="panel form" method="post" action="/settings/weights">
+  <h2>{{ t('weights') }}</h2>
+  <p class="muted small">{{ t('weights_hint') }}</p>
+  <div class="row">
+  {% for tp in TOPICS %}
+    <label class="grow">{{ t(tp) }}<input type="number" name="{{ tp }}" min="0" max="10" step="0.5" value="{{ '%g'|format(weights[tp]) }}"></label>
+  {% endfor %}
+  </div>
+  <div class="actions"><button class="btn primary">{{ t('save') }}</button></div>
+</form>
+
+<section class="panel">
+  <h2>{{ t('language') }}</h2>
+  <div class="actions">
+    <a class="btn {% if lang == 'es' %}primary{% endif %}" href="/lang/es?next=/settings">Español</a>
+    <a class="btn {% if lang == 'en' %}primary{% endif %}" href="/lang/en?next=/settings">English</a>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>{{ t('backup') }}</h2>
+  <p class="muted small">{{ t('backup_hint') }}</p>
+  <div class="actions">
+    <a class="btn" href="/export.csv">CSV</a>
+    <a class="btn" href="/export.json">JSON</a>
+  </div>
+</section>
+{% endblock %}

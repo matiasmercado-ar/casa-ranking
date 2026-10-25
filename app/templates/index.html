@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% from "_macros.html" import score_badge, bar, chip, price %}
+{% block content %}
+<section class="hero">
+  <div>
+    <h1>{{ t('nav_ranking') }}</h1>
+    <p class="muted">{{ t('tagline') }}</p>
+  </div>
+  <a class="btn primary" href="/houses/new">＋ {{ t('nav_add') }}</a>
+</section>
+
+<form class="quickadd" method="get" action="/houses/new">
+  <input type="url" name="url" placeholder="https://… {{ t('link')|lower }}" aria-label="{{ t('link') }}" required>
+  <button class="btn">{{ t('nav_add') }}</button>
+</form>
+
+{% if not rows %}
+  <div class="empty">
+    <div class="empty-icon">🏡</div>
+    <h2>{{ t('empty_title') }}</h2>
+    <p class="muted">{{ t('empty_body') }}</p>
+  </div>
+{% else %}
+  <div class="list-head">
+    <span class="muted">{{ t('houses_count', n=rows|length) }}</span>
+    {% if discarded %}
+      {% if show_all %}<a href="/">{{ t('hide_discarded') }}</a>{% else %}<a href="/?all=1">{{ t('show_discarded') }} ({{ discarded }})</a>{% endif %}
+    {% endif %}
+  </div>
+  <ol class="cards">
+  {% for r in rows %}{% set h = r.house %}
+    <li class="card status-{{ h.status }}">
+      <a class="card-link" href="/houses/{{ h.id }}" aria-label="{{ h.title or t('untitled') }}"></a>
+      <div class="rank">#{{ r.rank }}</div>
+      <div class="thumb">{% if h.image_url %}<img src="{{ h.image_url }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% else %}<span>🏠</span>{% endif %}</div>
+      <div class="card-body">
+        <div class="card-title">
+          <h2>{{ h.title or t('untitled') }}</h2>
+          {% if h.status != 'activa' %}<span class="pill {{ h.status }}">{{ t(h.status) }}</span>{% endif %}
+        </div>
+        <p class="muted small">{{ h.address }}{% if h.address and h.price is not none %} · {% endif %}{{ price(h) }}</p>
+        <div class="bars">{% for tp in TOPICS %}{{ bar(t(tp), r.topics[tp]) }}{% endfor %}</div>
+        <div class="chips">{% for f in AMENITIES %}{{ chip(t, f, h[f]) }}{% endfor %}</div>
+      </div>
+      <div class="card-score">
+        {{ score_badge(r.overall, big=true) }}
+        <span class="small muted">{{ t('amenities') }} {{ r.amenities_yes }}/{{ r.amenities_total }}</span>
+        {% if r.overall is none %}<span class="small muted">{{ t('not_rated') }}</span>
+        {% else %}<span class="small muted">{{ t('rated_by', n=r.rated_by, total=raters) }}</span>{% endif %}
+        {% if h.url %}<a class="small ext" href="{{ h.url }}" target="_blank" rel="noopener noreferrer">{{ t('open_listing') }} ↗</a>{% endif %}
+      </div>
+    </li>
+  {% endfor %}
+  </ol>
+{% endif %}
+{% endblock %}

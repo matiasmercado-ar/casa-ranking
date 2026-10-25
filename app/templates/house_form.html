@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}{{ (house.title if house else t('nav_add')) }} · {{ t('app_name') }}{% endblock %}
+{% block content %}
+<h1>{{ t('edit') if house else t('nav_add') }}</h1>
+<form class="panel form" method="post" action="{{ '/houses/%d'|format(house.id) if house else '/houses' }}">
+  <label>{{ t('link') }}
+    <input type="url" name="url" value="{{ house.url if house else prefill_url }}" placeholder="https://…" {% if not house %}autofocus{% endif %}>
+  </label>
+  <label>{{ t('title') }}
+    <input type="text" name="title" value="{{ house.title if house else '' }}" maxlength="200">
+    {% if not house %}<small class="muted">{{ t('title_hint') }}</small>{% endif %}
+  </label>
+  <label>{{ t('address') }}
+    <input type="text" name="address" value="{{ house.address if house else '' }}" maxlength="200">
+  </label>
+  <div class="row">
+    <label class="grow">{{ t('price') }}
+      <input type="text" inputmode="numeric" name="price" value="{{ '%.0f'|format(house.price) if house and house.price is not none else '' }}">
+    </label>
+    <label>{{ t('currency') }}
+      <select name="currency">{% for c in CURRENCIES %}<option {% if house and house.currency == c %}selected{% endif %}>{{ c }}</option>{% endfor %}</select>
+    </label>
+  </div>
+  <label>{{ t('image_url') }}
+    <input type="url" name="image_url" value="{{ house.image_url if house else '' }}" placeholder="https://…jpg">
+  </label>
+  <label>{{ t('notes') }}
+    <textarea name="notes" rows="4">{{ house.notes if house else '' }}</textarea>
+  </label>
+  <div class="actions">
+    <button class="btn primary">{{ t('save') }}</button>
+    <a class="btn ghost" href="{{ '/houses/%d'|format(house.id) if house else '/' }}">{{ t('cancel') }}</a>
+  </div>
+</form>
+{% endblock %}

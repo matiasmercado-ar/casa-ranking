@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% from "_macros.html" import score_badge, bar, price %}
+{% block title %}{{ house.title or t('untitled') }} · {{ t('app_name') }}{% endblock %}
+{% block content %}
+<a class="back" href="/">← {{ t('nav_ranking') }}</a>
+<section class="detail-head">
+  <div class="detail-photo">{% if house.image_url %}<img src="{{ house.image_url }}" alt="" referrerpolicy="no-referrer">{% else %}<span>🏠</span>{% endif %}</div>
+  <div class="detail-info">
+    <h1>{{ house.title or t('untitled') }}</h1>
+    <p class="muted">{{ house.address }}{% if house.address and house.price is not none %} · {% endif %}<strong>{{ price(house) }}</strong></p>
+    <div class="actions wrap-row">
+      {% if house.url %}<a class="btn primary" href="{{ house.url }}" target="_blank" rel="noopener noreferrer">{{ t('open_listing') }} ↗</a>{% endif %}
+      <a class="btn" href="/houses/{{ house.id }}/edit">{{ t('edit') }}</a>
+      {% if house.url %}<form method="post" action="/houses/{{ house.id }}/refresh-preview"><button class="btn ghost">↻ {{ t('refresh_preview') }}</button></form>{% endif %}
+    </div>
+    {% if house.notes %}<p class="notes">{{ house.notes }}</p>{% endif %}
+  </div>
+  <div class="detail-score">
+    <span class="small muted">{{ t('score') }}</span>
+    <span id="overall">{{ score_badge(scores.overall, big=true) }}</span>
+    <span class="small muted" id="amen">{{ t('amenities') }} {{ scores.amenities_yes }}/{{ scores.amenities_total }}</span>
+  </div>
+</section>
+
+<form id="scores" class="panel" method="post" action="/houses/{{ house.id }}/scores" data-saved="{{ t('saved') }}">
+  <div class="panel-head">
+    <h2>{{ t('ratings') }}</h2>
+    <span class="save-state small muted" aria-live="polite"></span>
+  </div>
+  <p class="muted small">{{ t('ratings_hint') }}</p>
+
+  {% for tp in TOPICS %}
+  <fieldset class="topic">
+    <legend>{{ t(tp) }}{% if tp == 'antiguedad' %} <small class="muted">({{ t('antiguedad_hint') }})</small>{% endif %}
+      <span class="topic-avg" data-topic="{{ tp }}">{{ '%.1f'|format(scores.topics[tp]) if scores.topics[tp] is not none else '–' }}</span>
+    </legend>
+    {% for rater in raters %}{% set cur = by_rater[rater.id][tp] if rater.id in by_rater else none %}{% set name = 'r%d_%s'|format(rater.id, tp) %}
+    <div class="rate-row">
+      <span class="rater">{{ rater.name }}</span>
+      <div class="stars" role="radiogroup" aria-label="{{ rater.name }} – {{ t(tp) }}">
+        {% for v in range(10, 0, -1) %}
+          <input type="radio" id="{{ name }}_{{ v }}" name="{{ name }}" value="{{ v }}" {% if cur == v %}checked{% endif %}>
+          <label class="star" for="{{ name }}_{{ v }}" title="{{ v }}">★</label>
+        {% endfor %}
+        <input type="radio" id="{{ name }}_0" name="{{ name }}" value="0" {% if cur == 0 %}checked{% endif %}>
+        <label class="zero" for="{{ name }}_0" title="0">0</label>
+        <input type="radio" id="{{ name }}_x" name="{{ name }}" value="" {% if cur is none %}checked{% endif %}>
+        <label class="clear" for="{{ name }}_x" title="{{ t('clear') }}">×</label>
+      </div>
+      <output class="rate-val">{{ cur if cur is not none else '–' }}</output>
+    </div>
+    {% endfor %}
+  </fieldset>
+  {% endfor %}
+
+  <h2>{{ t('features') }}</h2>
+  <div class="features">
+    {% for f in FEATURES %}
+    <div class="feature">
+      <span>{{ t(f) }}</span>
+      <div class="seg" role="radiogroup" aria-label="{{ t(f) }}">
+        {% for v, key in [('1', 'yes'), ('0', 'no'), ('', 'unknown')] %}
+        <input type="radio" id="{{ f }}_{{ key }}" name="{{ f }}" value="{{ v }}" {% if (house[f]|string if house[f] is not none else '') == v %}checked{% endif %}>
+        <label for="{{ f }}_{{ key }}" class="{{ key }}">{{ t(key) }}</label>
+        {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <h2>{{ t('status') }}</h2>
+  <div class="seg status-seg">
+    {% for s in STATUSES %}
+    <input type="radio" id="st_{{ s }}" name="status" value="{{ s }}" {% if house.status == s %}checked{% endif %}>
+    <label for="st_{{ s }}" class="{{ s }}">{{ t(s) }}</label>
+    {% endfor %}
+  </div>
+
+  <noscript><div class="actions"><button class="btn primary">{{ t('save') }}</button></div></noscript>
+</form>
+
+<form class="danger" method="post" action="/houses/{{ house.id }}/delete" onsubmit="return confirm('{{ t('delete_confirm') }}')">
+  <span class="small muted">{{ t('added_on') }} {{ house.created_at[:10] }}</span>
+  <button class="btn danger-btn small">{{ t('delete') }}</button>
+</form>
+{% endblock %}
