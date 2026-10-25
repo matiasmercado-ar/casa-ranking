@@ -319,6 +319,26 @@ def test_add_from_link_reports_missing_fields(main, users, monkeypatch):
     assert "No pudimos leer: foto, precio, ubicación." in page
 
 
+def test_network_failure_explains_why_and_keeps_house(main, users, monkeypatch):
+    ana, _ = users
+    monkeypatch.setattr(main.linkpreview, "fetch",
+                        lambda url, timeout=10.0: {"error": "dns", "detail": "timeout", "site": "MercadoLibre"})
+    page = ana.post("/houses", data={"url": "https://casa.mercadolibre.com.ar/MLA-4017162980-venta-de-casa-guaymallen-_JM"}).text
+    assert "No pudimos leer la publicación de MercadoLibre: no se pudo resolver el nombre del sitio" in page
+    assert "Venta de casa guaymallen" in page  # title from the URL instead of "Casa sin título"
+    monkeypatch.setattr(main.linkpreview, "fetch",
+                        lambda url, timeout=10.0: {"error": "http_5xx", "detail": "503", "site": "MercadoLibre"})
+    h = re.search(r'href="/houses/(\d+)"', ana.get("/").text).group(1)
+    page = ana.post(f"/houses/{h}/refresh-preview").text
+    assert "el sitio respondió con error 503" in page
+
+
+def test_single_add_button_on_ranking(users):
+    ana, _ = users
+    page = ana.get("/").text
+    assert page.count("Agregar casa") == 1 and 'href="/houses/new#manual"' in page
+
+
 def test_duplicate_link_goes_to_existing_house(main, users, monkeypatch):
     ana, beto = users
     monkeypatch.setattr(main.linkpreview, "fetch", lambda url, timeout=10.0: dict(LISTING))

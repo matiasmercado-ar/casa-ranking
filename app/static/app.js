@@ -22,6 +22,9 @@
   document.querySelector("[data-theme-seg]")?.addEventListener("change", (e) => apply(e.target.value));
 })();
 
+// /houses/new#manual opens the manual form directly.
+if (location.hash === "#manual") document.getElementById("manual")?.setAttribute("open", "");
+
 // Forms that read a listing take a second or two: say so and block double submits.
 document.querySelectorAll("form[data-busy]").forEach((form) => {
   form.addEventListener("submit", () => {

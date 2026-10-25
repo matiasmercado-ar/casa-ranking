@@ -7,6 +7,7 @@ import secrets
 import sqlite3
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -19,7 +20,7 @@ from .db import AMENITIES, FEATURES, HOUSE_QUESTIONS, NEARBY, STATUSES, TOPICS
 from .i18n import DEFAULT_LANG, LANGS, translate
 from .scoring import BONUS_STEP, IMPORTANCE, house_scores, ranking, weights
 
-__version__ = "1.3.0"
+__version__ = "1.3.1"
 BASE = Path(__file__).parent
 CURRENCIES = ("USD", "ARS")
 MIN_PASSWORD = 8
@@ -82,6 +83,8 @@ def render(request: Request, name: str, status_code: int = 200, **ctx) -> HTMLRe
         # Field lists are stored as keys so they translate with the page language.
         if "fields" in m["kw"]:
             m["kw"]["fields"] = ", ".join(translate(f"field_{f}", lang) for f in m["kw"]["fields"])
+        if "reason" in m["kw"]:
+            m["kw"]["reason"] = translate(m["kw"]["reason"], lang, code=m["kw"].get("code", ""))
     ctx.update(
         flashes=[{"kind": m["kind"], "text": translate(m["key"], lang, **m["kw"])} for m in messages],
         lang=lang,
@@ -205,7 +208,7 @@ def create_house(
         meta = linkpreview.fetch(url)
     typed_price = _price(price)
     values = {
-        "title": title.strip() or meta.get("title", ""),
+        "title": title.strip() or meta.get("title", "") or linkpreview.title_from_url(url),
         "address": address.strip() or meta.get("address", ""),
         "price": typed_price if typed_price is not None else meta.get("price"),
         "currency": currency if typed_price is not None else meta.get("currency", currency),
@@ -223,14 +226,22 @@ def create_house(
         )
         house_id = cur.lastrowid
     if url:
-        got = [f for f in IMPORTED if meta.get(f)]
-        missing = [f for f in ("image_url", "price", "address") if not meta.get(f)]
-        site = meta.get("site") or linkpreview.site_of(url) or "link"
-        if got:
-            flash(request, "ok", "flash_imported", site=site, fields=got)
-        if missing:
-            flash(request, "warn", "flash_missing", fields=missing)
+        _flash_import(request, url, meta)
     return RedirectResponse(f"/houses/{house_id}", status_code=303)
+
+
+def _flash_import(request: Request, url: str, meta: dict) -> None:
+    site = meta.get("site") or linkpreview.site_of(url) or (urlparse(url).hostname or "link")
+    if meta.get("error"):
+        reason = meta["error"].split("_")[0]  # http_5xx / http_429 -> http
+        flash(request, "err", "flash_fetch_failed", site=site, reason=f"reason_{reason}", code=meta.get("detail", ""))
+        return
+    got = [f for f in IMPORTED if meta.get(f)]
+    missing = [f for f in ("image_url", "price", "address") if not meta.get(f)]
+    if got:
+        flash(request, "ok", "flash_imported", site=site, fields=got)
+    if missing:
+        flash(request, "warn", "flash_missing", fields=missing)
 
 
 @app.get("/houses/{house_id}", response_class=HTMLResponse)
@@ -282,8 +293,11 @@ def refresh_preview(request: Request, house_id: int):
     with db.session() as conn:
         h = _house_or_404(conn, house_id)
         meta = linkpreview.fetch(h["url"]) if h["url"] else {}
-        if not meta.get("image_url") and not meta.get("price") and not meta.get("address"):
-            flash(request, "err", "flash_refresh_failed")
+        if meta.get("error") or not (meta.get("image_url") or meta.get("price") or meta.get("address")):
+            if meta.get("error"):
+                _flash_import(request, h["url"], meta)
+            else:
+                flash(request, "err", "flash_refresh_failed")
             return RedirectResponse(f"/houses/{house_id}", status_code=303)
         fields = {k: meta[k] for k in ("title", "image_url", "address", "price", "currency", "lat", "lng") if meta.get(k)}
         if fields.get("currency") not in (None, *CURRENCIES):

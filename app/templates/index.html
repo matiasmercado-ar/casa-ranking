@@ -6,13 +6,13 @@
     <h1>{{ t('nav_ranking') }}</h1>
     <p class="muted">{{ t('tagline') }}</p>
   </div>
-  <a class="btn primary hide-mobile" href="/houses/new">＋ {{ t('nav_add') }}</a>
 </section>
 
 <form class="quickadd" method="post" action="/houses" data-busy="{{ t('importing') }}">
   <input type="url" name="url" placeholder="https://… {{ t('link')|lower }}" aria-label="{{ t('link') }}" required>
-  <button class="btn primary">{{ t('nav_add_short') }}</button>
+  <button class="btn primary">＋ {{ t('nav_add') }}</button>
 </form>
+<p class="quickadd-alt small"><a href="/houses/new#manual">{{ t('or_manual') }}</a></p>
 
 <div class="list-head">
   <div class="filters" role="group">

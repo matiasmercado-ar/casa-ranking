@@ -9,7 +9,7 @@
   <input type="url" name="url" value="{{ prefill_url }}" placeholder="https://…" required autofocus aria-label="{{ t('link') }}">
   <div class="actions"><button class="btn primary">{{ t('import_btn') }}</button></div>
 </form>
-<details class="manual">
+<details class="manual" id="manual">
 <summary>{{ t('manual_entry') }}</summary>
 {% endif %}
 <form class="panel form" method="post" action="{{ '/houses/%d'|format(house.id) if house else '/houses' }}">

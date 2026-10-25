@@ -130,7 +130,8 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, .btn:focus-vi
 
 /* ranking */
 .hero { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
-.quickadd { display: flex; gap: 8px; margin: 12px 0 20px; }
+.quickadd { display: flex; gap: 8px; margin: 12px 0 4px; }
+.quickadd-alt { margin: 0 0 16px; text-align: right; }
 .quickadd input { flex: 1; }
 .list-head { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: .9rem; }
 .cards { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }

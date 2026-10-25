@@ -98,3 +98,80 @@ def test_generic_site_falls_back_to_open_graph_and_title_price():
     assert d["image_url"] == "https://otra.example/img.jpg"
     assert d["price"] == 150000000 and d["currency"] == "ARS"
     assert d["site"] == ""
+
+
+# --- fetch: retries and error reasons ------------------------------------------
+
+import socket  # noqa: E402
+
+import httpx  # noqa: E402
+import pytest  # noqa: E402
+
+from app import linkpreview  # noqa: E402
+
+
+@pytest.fixture
+def no_sleep(monkeypatch):
+    monkeypatch.setattr(linkpreview.time, "sleep", lambda s: None)
+
+
+def public_dns(monkeypatch):
+    monkeypatch.setattr(linkpreview.socket, "getaddrinfo", lambda h, p: [(0, 0, 0, "", ("8.8.8.8", 0))])
+
+
+def test_dns_failure_is_retried_then_reported(monkeypatch, no_sleep):
+    calls = []
+
+    def broken(host, port):
+        calls.append(host)
+        raise socket.gaierror("Temporary failure in name resolution")
+
+    monkeypatch.setattr(linkpreview.socket, "getaddrinfo", broken)
+    d = linkpreview.fetch("https://www.remax.com.ar/listings/x")
+    assert d["error"] == "dns" and d["site"] == "Remax"
+    assert len(calls) == 3  # first try + 2 retries
+
+
+def test_transient_error_recovers_on_retry(monkeypatch, no_sleep):
+    public_dns(monkeypatch)
+    answers = iter([httpx.ConnectTimeout("slow"),
+                    httpx.Response(200, headers={"content-type": "text/html"},
+                                   text='<meta property="og:title" content="Casa - USD 50.000">')])
+
+    def get(self, url):
+        a = next(answers)
+        if isinstance(a, Exception):
+            raise a
+        a.request = httpx.Request("GET", url)
+        return a
+
+    monkeypatch.setattr(httpx.Client, "get", get)
+    d = linkpreview.fetch("https://inmoup.com.ar/a/ficha/b")
+    assert "error" not in d and d["price"] == 50000
+
+
+def test_http_404_is_not_retried(monkeypatch, no_sleep):
+    public_dns(monkeypatch)
+    calls = []
+
+    def get(self, url):
+        calls.append(url)
+        return httpx.Response(404, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx.Client, "get", get)
+    d = linkpreview.fetch("https://inmoup.com.ar/gone")
+    assert d["error"] == "http" and d["detail"] == "404" and len(calls) == 1
+
+
+def test_private_address_blocked(monkeypatch):
+    monkeypatch.setattr(linkpreview.socket, "getaddrinfo", lambda h, p: [(0, 0, 0, "", ("192.168.1.10", 0))])
+    assert linkpreview.fetch("http://router.lan/")["error"] == "blocked"
+
+
+def test_title_from_url():
+    t = linkpreview.title_from_url
+    assert t("https://casa.mercadolibre.com.ar/MLA-4017162980-venta-de-casa-guaymallen-mendoza-_JM") == \
+        "Venta de casa guaymallen mendoza"
+    assert t("https://inmoclick.com/1-x/inmuebles/2/ficha/casa-en-venta-en-paso-de-guana-0") == \
+        "Casa en venta en paso de guana 0"
+    assert t("https://example.com/") == ""

@@ -13,8 +13,10 @@ silent: whatever is not found can be typed by hand.
 """
 import ipaddress
 import json
+import logging
 import re
 import socket
+import time
 from html import unescape
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse, urlunparse
@@ -24,6 +26,9 @@ import httpx
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36"
 HEADERS = {"User-Agent": UA, "Accept-Language": "es-AR,es;q=0.9", "Accept": "text/html,application/xhtml+xml"}
 MAX_BYTES = 3_000_000
+RETRY_DELAYS = (1.5, 4.0)  # pauses between attempts on transient errors (DNS, timeout, 5xx)
+DEADLINE = 30.0  # never keep the user waiting longer than this in total
+log = logging.getLogger("uvicorn.error")
 
 SITES = {
     "inmoup.com.ar": "Inmoup",
@@ -78,12 +83,23 @@ class _MetaParser(HTMLParser):
             self.title = data.strip()
 
 
-def _is_public(host: str) -> bool:
+class FetchError(Exception):
+    """reason: dns | timeout | connect | http | not_html | blocked; transient ones are retried."""
+
+    TRANSIENT = ("dns", "timeout", "connect", "http_5xx", "http_429")
+
+    def __init__(self, reason: str, detail: str = ""):
+        super().__init__(f"{reason} {detail}".strip())
+        self.reason, self.detail = reason, detail
+
+
+def _check_host(host: str) -> None:
     try:
         infos = socket.getaddrinfo(host, None)
-    except OSError:
-        return False
-    return all(ipaddress.ip_address(i[4][0]).is_global for i in infos)
+    except OSError as e:
+        raise FetchError("dns", str(e)) from e
+    if not all(ipaddress.ip_address(i[4][0]).is_global for i in infos):
+        raise FetchError("blocked", "private address")
 
 
 # --- helpers ---------------------------------------------------------------
@@ -306,15 +322,60 @@ def extract(html: str, url: str) -> dict:
     return out
 
 
-def fetch(url: str, timeout: float = 10.0) -> dict:
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https") or not parsed.hostname or not _is_public(parsed.hostname):
-        return {}
+def title_from_url(url: str) -> str:
+    """Last resort title from the URL slug: '.../MLA-123-venta-de-casa-guaymallen-_JM' -> 'Venta de casa guaymallen'."""
+    slug = urlparse(url).path.rstrip("/").rsplit("/", 1)[-1]
+    slug = re.sub(r"^MLA-?\d+-|_JM$|\.html?$", "", slug, flags=re.I)
+    words = re.sub(r"[-_]+", " ", slug).strip()
+    return words[:1].upper() + words[1:] if len(words) > 3 else ""
+
+
+def _get_once(url: str, timeout: float) -> dict:
+    host = urlparse(url).hostname
+    _check_host(host)
     try:
         with httpx.Client(timeout=timeout, follow_redirects=True, headers=HEADERS) as c:
             r = c.get(url)
-            if r.status_code >= 400 or "html" not in r.headers.get("content-type", ""):
-                return {}
-            return extract(r.text[:MAX_BYTES], str(r.url))
-    except (httpx.HTTPError, ValueError):
-        return {}
+    except httpx.TimeoutException as e:
+        raise FetchError("timeout", type(e).__name__) from e
+    except httpx.ConnectError as e:
+        # httpx re-resolves the name, so a DNS hiccup can also surface here.
+        reason = "dns" if "name" in str(e).lower() or "resolution" in str(e).lower() else "connect"
+        raise FetchError(reason, str(e)) from e
+    except httpx.HTTPError as e:
+        raise FetchError("connect", str(e)) from e
+    if r.status_code == 429 or r.status_code >= 500:
+        raise FetchError(f"http_{'429' if r.status_code == 429 else '5xx'}", str(r.status_code))
+    if r.status_code >= 400:
+        raise FetchError("http", str(r.status_code))
+    if "html" not in r.headers.get("content-type", ""):
+        raise FetchError("not_html", r.headers.get("content-type", ""))
+    return extract(r.text[:MAX_BYTES], str(r.url))
+
+
+def fetch(url: str, timeout: float = 10.0) -> dict:
+    """Read a listing. Never raises: on failure returns {"error": reason, ...} so the UI can say why."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return {"error": "blocked", "site": site_of(url)}
+    start = time.monotonic()
+    error = None
+    for attempt, delay in enumerate((0.0, *RETRY_DELAYS), 1):
+        if delay:
+            if time.monotonic() - start + delay + timeout > DEADLINE:
+                break
+            time.sleep(delay)
+        try:
+            data = _get_once(url, timeout)
+            found = sorted(k for k in ("image_url", "price", "address", "facts") if data.get(k))
+            log.info("listing read: %s site=%s attempt=%d %.1fs found=%s", parsed.hostname, data.get("site") or "-",
+                     attempt, time.monotonic() - start, ",".join(found) or "nothing")
+            return data
+        except FetchError as e:
+            error = e
+            log.warning("listing read failed: %s attempt=%d %.1fs reason=%s detail=%s", parsed.hostname, attempt,
+                        time.monotonic() - start, e.reason, e.detail[:200])
+            if e.reason not in FetchError.TRANSIENT:
+                break
+    return {"error": error.reason if error else "timeout", "detail": error.detail if error else "",
+            "site": site_of(url)}
