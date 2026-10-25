@@ -18,11 +18,12 @@ together, but any number of people can rate.
   only change their own stars (enforced server side); everyone else's are shown
   read-only. The ranking uses the average, and unrated topics are ignored rather than
   counted as zero. A "Te falta puntuar" tag shows which houses you still have to rate.
-- **Visited or online only**: a big label on every card tells houses you have seen in
-  person from ones you only know from photos, with a filter for each.
-- **Yes / No / unknown checks**: *¿Mejorable?* (room to improve), supermarket, school,
-  public transport, gym, bike lane, park, hospital/clinic nearby.
-- **Weighted score**: give each topic a weight in Settings (e.g. location counts double).
+- **Visited or not**: a green "Visitada" or red "No visitada" banner on every card,
+  with a filter for each.
+- **Yes / No / "No sé" questions** that nudge the score: about the house (*¿Mejorable?*,
+  pet friendly, pool or room for one, room for an above-ground pool) and what's nearby
+  (supermarket, school, public transport, gym, bike lane, park, hospital/clinic).
+- **Weighted score**: give each topic a weight and each question an importance in Settings.
 - **Statuses**: active, favourite, discarded (discarded ones are hidden from the ranking).
 - **Link preview**: when you add a link, it tries to read the title and photo from the
   page's Open Graph tags. Many portals block bots, so you can always type them by hand.
@@ -98,11 +99,14 @@ docker compose exec casa-ranking python -c "from app import db; c=db.connect(); 
 
 ## How the score works
 
-For each topic the app averages the ratings of everyone who rated it. The house score
-is the weighted average of those topic averages (weights default to 1). Houses are
-sorted by score, ties broken by how many amenities are nearby; unrated houses go last.
-*¿Mejorable?* is shown but not counted as an amenity, since whether it is good news
-depends on you.
+For each topic the app averages the ratings of everyone who rated it. The star score is
+the weighted average of those topic averages (weights default to 1).
+
+The Yes / No / "No sé" questions then adjust it: each **Yes adds** and each **No
+subtracts** `0.3 × importance`, where the admin sets each question's importance to 2
+(very important, ±0.6), 1 (normal, ±0.3) or 0 (ignored). "No sé" changes nothing. The
+final score is kept on the 0-10 scale, but houses are sorted by the unclamped value so
+two "10"s still order correctly. Unrated houses go last.
 
 ## Stack
 

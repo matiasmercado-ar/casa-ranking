@@ -15,13 +15,13 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import db, linkpreview
-from .db import AMENITIES, FEATURES, STATUSES, TOPICS
+from .db import AMENITIES, FEATURES, HOUSE_QUESTIONS, NEARBY, STATUSES, TOPICS
 from .i18n import DEFAULT_LANG, LANGS, translate
-from .scoring import house_scores, ranking, weights
+from .scoring import BONUS_STEP, IMPORTANCE, house_scores, ranking, weights
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 BASE = Path(__file__).parent
-CURRENCIES = ("USD", "ARS", "EUR")
+CURRENCIES = ("USD", "ARS")
 MIN_PASSWORD = 8
 log = logging.getLogger("uvicorn.error")
 
@@ -80,6 +80,10 @@ def render(request: Request, name: str, status_code: int = 200, **ctx) -> HTMLRe
         TOPICS=TOPICS,
         FEATURES=FEATURES,
         AMENITIES=AMENITIES,
+        NEARBY=NEARBY,
+        HOUSE_QUESTIONS=HOUSE_QUESTIONS,
+        BONUS_STEP=BONUS_STEP,
+        IMPORTANCE=IMPORTANCE,
         STATUSES=STATUSES,
         CURRENCIES=CURRENCIES,
         version=__version__,
@@ -184,11 +188,12 @@ def house_detail(request: Request, house_id: int):
         h = _house_or_404(conn, house_id)
         raters = _raters(conn)
         rows = conn.execute("SELECT * FROM ratings WHERE house_id = ?", (house_id,)).fetchall()
-        scores = house_scores(h, rows, weights(conn))
+        w = weights(conn)
+        scores = house_scores(h, rows, w)
     # The logged-in user's row first: it is the only one they can edit.
     me = request.state.user
     raters = sorted(raters, key=lambda r: r["id"] != me["id"])
-    return render(request, "house_detail.html", house=h, raters=raters, by_rater=scores["ratings"], scores=scores)
+    return render(request, "house_detail.html", house=h, raters=raters, by_rater=scores["ratings"], scores=scores, w=w)
 
 
 @app.get("/houses/{house_id}/edit", response_class=HTMLResponse)
@@ -317,6 +322,9 @@ async def save_weights(request: Request):
             except ValueError:
                 value = 1.0
             db.set_setting(conn, f"weight_{t}", f"{value:g}")
+        for f in FEATURES:
+            value = str(form.get(f"importance_{f}", "1"))
+            db.set_setting(conn, f"importance_{f}", value if value in ("0", "1", "2") else "1")
     return _back(msg="saved", anchor="#weights")
 
 
@@ -405,7 +413,9 @@ def _export_rows(conn) -> list[dict]:
         item = {"rank": row["rank"], "id": h["id"], "title": h["title"], "url": h["url"], "address": h["address"],
                 "price": h["price"], "currency": h["currency"], "status": h["status"],
                 "visitada": bool(h["visitada"]),
-                "score": round(row["overall"], 2) if row["overall"] is not None else None}
+                "score": round(row["overall"], 2) if row["overall"] is not None else None,
+                "stars_score": round(row["base"], 2) if row["base"] is not None else None,
+                "questions_bonus": row["bonus"]}
         item.update({f"avg_{t}": round(v, 2) if v is not None else None for t, v in row["topics"].items()})
         item.update({f: {1: True, 0: False}.get(h[f]) for f in FEATURES})
         item["notes"] = h["notes"]

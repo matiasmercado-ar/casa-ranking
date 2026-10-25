@@ -226,6 +226,8 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, .btn:focus-vi
 .seg input:checked + label.yes { background: var(--yes); color: #fff; }
 .seg input:checked + label.no { background: var(--no); color: #fff; }
 .seg input:checked + label { background: var(--surface-2); color: var(--text); }
+.seg input:checked + label.unknown { background: var(--star); color: #2a211c; }
+.seg label.unknown { white-space: nowrap; }
 .seg input:focus-visible + label { outline: 2px solid var(--accent); outline-offset: -2px; }
 .status-seg { flex-wrap: wrap; }
 .status-seg input:checked + label.favorita { background: var(--star); color: #2a211c; }
@@ -275,7 +277,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, .btn:focus-vi
   font-size: .78rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase;
 }
 .ribbon.visited { background: var(--yes); color: #fff; }
-.ribbon.online { background: color-mix(in srgb, var(--surface) 80%, transparent); color: var(--muted); font-weight: 700; backdrop-filter: blur(2px); }
+.ribbon.not-visited { background: var(--no); color: #fff; }
 .filters { display: flex; gap: 6px; flex-wrap: wrap; }
 .fchip { padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); font-weight: 600; font-size: .85rem; }
 .fchip:hover { text-decoration: none; color: var(--text); }
@@ -332,6 +334,17 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, .btn:focus-vi
 .theme-seg { margin-bottom: 4px; }
 .login-logo { margin-bottom: 4px; }
 
+/* questions */
+.q-group { font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 14px 0 2px; }
+.impact { font-size: .72rem; font-weight: 700; padding: 1px 6px; border-radius: 999px; background: var(--surface-2); color: var(--muted); white-space: nowrap; }
+.impact.imp-2 { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+.impact.imp-0 { opacity: .5; }
+.chips + .chips { margin-top: 4px; }
+.breakdown { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.importance { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 6px 24px; margin-bottom: 8px; }
+.form label.imp-row { flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; margin: 0; font-weight: 500; padding: 4px 0; border-bottom: 1px dashed var(--border); }
+.imp-row select { width: auto; min-width: 180px; padding: 6px 10px; }
+
 /* bottom tab bar (phones only) */
 .tabbar { display: none; }
 
@@ -375,7 +388,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, .btn:focus-vi
   .card-body { padding-left: 14px; }
   .thumb { grid-area: thumb; width: 100%; aspect-ratio: 16 / 9; border-radius: 0; font-size: 2.6rem; }
   .ribbon { font-size: .85rem; padding: 6px; }
-  .card-score { grid-area: score; align-self: start; padding-right: 14px; min-width: 0; }
+  .card-score { grid-area: score; align-self: start; padding-right: 14px; min-width: 0; max-width: 128px; }
   .card-body { grid-area: body; min-width: 0; }
   .badge.big { font-size: 1.3rem; min-width: 60px; padding: 6px 8px; }
   .bar { grid-template-columns: 84px 1fr 28px; }
@@ -390,6 +403,10 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, .btn:focus-vi
   .stars .star { font-size: 1.5rem; padding: 0; }
   .features { grid-template-columns: 1fr; }
   .settings-grid { grid-template-columns: 1fr; }
+  .importance { grid-template-columns: 1fr; }
+  .form label.imp-row { flex-direction: column; align-items: stretch; gap: 4px; }
+  .imp-row select { width: 100%; }
+  .breakdown { white-space: normal; }
   .quickadd .btn { padding: 9px 12px; }
 }
 @media (max-width: 380px) {

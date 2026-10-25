@@ -18,6 +18,7 @@
   <div class="detail-score">
     <span class="small muted">{{ t('score') }}</span>
     <span id="overall">{{ score_badge(scores.overall, big=true) }}</span>
+    <span class="small muted" id="breakdown" data-tpl="{{ t('score_breakdown', base='{base}', bonus='{bonus}') }}">{% if scores.base is not none %}{{ t('score_breakdown', base='%.1f'|format(scores.base), bonus='%+.1f'|format(scores.bonus)) }}{% endif %}</span>
     <span class="small muted" id="amen">{{ t('amenities') }} {{ scores.amenities_yes }}/{{ scores.amenities_total }}</span>
   </div>
 </section>
@@ -75,10 +76,13 @@
   {% endfor %}
 
   <h2>{{ t('features') }}</h2>
+  <p class="muted small">{{ t('q_hint') }}</p>
+  {% for group, questions in [('q_house', HOUSE_QUESTIONS), ('q_nearby', NEARBY)] %}
+  <h3 class="q-group">{{ t(group) }}</h3>
   <div class="features">
-    {% for f in FEATURES %}
+    {% for f in questions %}{% set imp = w['q:' ~ f] %}
     <div class="feature">
-      <span>{{ t(f) }}</span>
+      <span>{{ t(f) }} <small class="impact imp-{{ imp }}" title="{{ t('importance') }}">±{{ '%g'|format(BONUS_STEP * imp) }}</small></span>
       <div class="seg" role="radiogroup" aria-label="{{ t(f) }}">
         {% for v, key in [('1', 'yes'), ('0', 'no'), ('', 'unknown')] %}
         <input type="radio" id="{{ f }}_{{ key }}" name="{{ f }}" value="{{ v }}" {% if (house[f]|string if house[f] is not none else '') == v %}checked{% endif %}>
@@ -88,6 +92,7 @@
     </div>
     {% endfor %}
   </div>
+  {% endfor %}
 
   <h2>{{ t('status') }}</h2>
   <div class="seg status-seg">

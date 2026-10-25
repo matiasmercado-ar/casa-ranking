@@ -56,6 +56,12 @@
         badge.classList.toggle("none", s.overall === null);
         badge.style.setProperty("--s", s.overall ?? 0);
       }
+      const bd = document.getElementById("breakdown");
+      if (bd) {
+        const sign = s.bonus >= 0 ? "+" : "−";
+        bd.textContent = s.base === null ? "" :
+          bd.dataset.tpl.replace("{base}", s.base.toFixed(1)).replace("{bonus}", sign + Math.abs(s.bonus).toFixed(1));
+      }
       const amen = document.getElementById("amen");
       if (amen) amen.textContent = amen.textContent.replace(/\d+\/\d+/, `${s.amenities_yes}/${s.amenities_total}`);
       state.textContent = "✓ " + form.dataset.saved;

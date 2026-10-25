@@ -45,7 +45,7 @@
       <div class="thumb">
         {% if h.image_url %}<img src="{{ h.image_url }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% else %}<span>🏠</span>{% endif %}
         {% if h.visitada %}<span class="ribbon visited">✓ {{ t('visitada') }}</span>
-        {% else %}<span class="ribbon online">{{ t('not_visited') }}</span>{% endif %}
+        {% else %}<span class="ribbon not-visited">✗ {{ t('not_visited') }}</span>{% endif %}
       </div>
       <div class="card-body">
         <div class="card-title">
@@ -55,10 +55,12 @@
         </div>
         <p class="muted small">{{ h.address }}{% if h.address and h.price is not none %} · {% endif %}{{ price(h) }}</p>
         <div class="bars">{% for tp in TOPICS %}{{ bar(t(tp), r.topics[tp]) }}{% endfor %}</div>
-        <div class="chips">{% for f in AMENITIES %}{{ chip(t, f, h[f]) }}{% endfor %}</div>
+        <div class="chips">{% for f in HOUSE_QUESTIONS %}{{ chip(t, f, h[f]) }}{% endfor %}</div>
+        <div class="chips">{% for f in NEARBY %}{{ chip(t, f, h[f]) }}{% endfor %}</div>
       </div>
       <div class="card-score">
         {{ score_badge(r.overall, big=true) }}
+        {% if r.base is not none %}<span class="small muted breakdown">{{ t('score_breakdown', base='%.1f'|format(r.base), bonus='%+.1f'|format(r.bonus)) }}</span>{% endif %}
         <span class="small muted">{{ t('amenities') }} {{ r.amenities_yes }}/{{ r.amenities_total }}</span>
         {% if r.overall is none %}<span class="small muted">{{ t('not_rated') }}</span>
         {% else %}<span class="small muted">{{ t('rated_by', n=r.rated_by, total=raters) }}</span>{% endif %}

@@ -8,18 +8,11 @@ from contextlib import contextmanager
 from pathlib import Path
 
 TOPICS = ("ubicacion", "vecindario", "construccion", "antiguedad")
-FEATURES = (
-    "mejorable",
-    "supermercado",
-    "colegio",
-    "transporte",
-    "gimnasio",
-    "ciclovia",
-    "plaza",
-    "hospital",
-)
-# "mejorable" is informational: it is not counted as a nearby amenity.
-AMENITIES = tuple(f for f in FEATURES if f != "mejorable")
+# Yes/No/unknown questions. Order is the order shown in the UI.
+NEARBY = ("supermercado", "colegio", "transporte", "gimnasio", "ciclovia", "plaza", "hospital")
+HOUSE_QUESTIONS = ("mejorable", "pet_friendly", "pileta", "pelopincho")
+FEATURES = HOUSE_QUESTIONS + NEARBY
+AMENITIES = NEARBY  # counted in the "Cerca x/7" summary
 STATUSES = ("activa", "favorita", "descartada")
 
 # Version 1 as first released; later versions are migrations on top of it so
@@ -74,6 +67,14 @@ ALTER TABLE houses ADD COLUMN visitada INTEGER NOT NULL DEFAULT 0;
 UPDATE houses SET visitada = 1, status = 'activa' WHERE status = 'visitada';
 """
 
+# v3: more house questions; EUR dropped (prices are USD or ARS).
+MIGRATION_V3 = """
+ALTER TABLE houses ADD COLUMN pet_friendly INTEGER;
+ALTER TABLE houses ADD COLUMN pileta INTEGER;
+ALTER TABLE houses ADD COLUMN pelopincho INTEGER;
+UPDATE houses SET currency = 'USD' WHERE currency NOT IN ('USD', 'ARS');
+"""
+
 
 def db_path() -> Path:
     return Path(os.environ.get("DATA_DIR", "./data")) / "casa-ranking.db"
@@ -124,6 +125,9 @@ def init() -> str | None:
         if version == 1:
             conn.executescript(MIGRATION_V2)
             version = 2
+        if version == 2:
+            conn.executescript(MIGRATION_V3)
+            version = 3
         conn.execute(f"PRAGMA user_version = {version}")
         return ensure_admin(conn)
 
