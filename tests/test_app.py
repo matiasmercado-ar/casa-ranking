@@ -1,6 +1,13 @@
 import re
+import sqlite3
 
+from fastapi.testclient import TestClient
+
+from app import db
 from app.linkpreview import _MetaParser
+from conftest import ADMIN_PW, load_app, login
+
+JSON = {"Accept": "application/json"}
 
 
 def add_house(client, **data):
@@ -10,113 +17,214 @@ def add_house(client, **data):
     return int(r.headers["location"].rsplit("/", 1)[1])
 
 
-def test_index_is_spanish_by_default(client):
-    r = client.get("/")
-    assert r.status_code == 200
-    assert 'lang="es"' in r.text
-    assert "Todavía no hay casas" in r.text
+# --- auth --------------------------------------------------------------------
 
 
-def test_english_toggle(client):
-    r = client.get("/lang/en?next=/")
-    assert r.status_code == 200  # followed the redirect
-    assert "No houses yet" in r.text
-    assert 'lang="en"' in r.text
-
-
-def test_lang_redirect_rejects_external_urls(client):
-    r = client.get("/lang/en?next=//evil.example", follow_redirects=False)
-    assert r.headers["location"] == "/"
-
-
-def test_raters_seeded_from_env(client):
-    r = client.get("/settings")
-    assert 'value="Ana"' in r.text and 'value="Beto"' in r.text
-
-
-def test_rating_and_ranking_order(client):
-    a = add_house(client, title="Casa A", price="150.000")
-    b = add_house(client, title="Casa B")
-    # Ana=1, Beto=2. B gets better marks than A.
-    client.post(f"/houses/{a}/scores", data={"r1_ubicacion": "4", "r2_ubicacion": "6", "status": "activa"})
-    r = client.post(
-        f"/houses/{b}/scores",
-        data={"r1_ubicacion": "9", "r1_construccion": "7", "supermercado": "1", "plaza": "0", "status": "favorita"},
-        headers={"Accept": "application/json"},
-    )
-    s = r.json()
-    assert s["topics"]["ubicacion"] == 9
-    assert s["overall"] == 8  # unrated topics are ignored, not counted as zero
-    assert s["amenities_yes"] == 1
-
-    page = client.get("/").text
-    assert page.index("Casa B") < page.index("Casa A")
-    assert "USD 150.000" in page
-
-
-def test_zero_is_a_score_and_empty_clears(client):
-    h = add_house(client)
-    s = client.post(f"/houses/{h}/scores", data={"r1_ubicacion": "0"}, headers={"Accept": "application/json"}).json()
-    assert s["overall"] == 0
-    s = client.post(f"/houses/{h}/scores", data={"r1_ubicacion": ""}, headers={"Accept": "application/json"}).json()
-    assert s["overall"] is None
-
-
-def test_out_of_range_scores_ignored(client):
-    h = add_house(client)
-    s = client.post(f"/houses/{h}/scores", data={"r1_ubicacion": "11"}, headers={"Accept": "application/json"}).json()
-    assert s["overall"] is None
-
-
-def test_weights_change_overall(client):
-    h = add_house(client)
-    client.post(f"/houses/{h}/scores", data={"r1_ubicacion": "10", "r1_construccion": "0"})
-    client.post("/settings/weights", data={"ubicacion": "3", "construccion": "1", "antiguedad": "1"})
-    s = client.post(
-        f"/houses/{h}/scores", data={"r1_ubicacion": "10", "r1_construccion": "0"}, headers={"Accept": "application/json"}
-    ).json()
-    assert s["overall"] == 7.5
-
-
-def test_discarded_hidden_by_default(client):
-    h = add_house(client, title="Descartable")
-    client.post(f"/houses/{h}/scores", data={"status": "descartada"})
-    assert "Descartable" not in client.get("/").text
-    assert "Descartable" in client.get("/?all=1").text
-
-
-def test_edit_and_delete(client):
-    h = add_house(client)
-    client.post(f"/houses/{h}", data={"title": "Renombrada", "currency": "ARS", "price": "1000"})
-    assert "Renombrada" in client.get(f"/houses/{h}").text
-    client.post(f"/houses/{h}/delete")
-    assert client.get(f"/houses/{h}").status_code == 404
-
-
-def test_remove_rater_deletes_ratings(client):
-    h = add_house(client)
-    client.post(f"/houses/{h}/scores", data={"r2_ubicacion": "5"})
-    client.post("/settings/raters", data={"name_1": "Ana", "name_2": "Beto", "remove_2": "on"})
-    s = client.post(f"/houses/{h}/scores", data={}, headers={"Accept": "application/json"}).json()
-    assert s["overall"] is None
-
-
-def test_exports(client):
-    h = add_house(client, title="Exportada")
-    client.post(f"/houses/{h}/scores", data={"r1_ubicacion": "8", "colegio": "1"})
-    data = client.get("/export.json").json()
-    assert data[0]["title"] == "Exportada" and data[0]["Ana_ubicacion"] == 8 and data[0]["colegio"] is True
-    csv = client.get("/export.csv").text
-    assert "Exportada" in csv and "Ana_ubicacion" in csv
-
-
-def test_password_protection(make_client):
-    c = make_client(APP_PASSWORD="secreto")
+def test_login_required(main):
+    c = TestClient(main.app)
     r = c.get("/", follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == "/login"
     assert c.get("/healthz").status_code == 200
-    assert "Contraseña incorrecta" in c.post("/login", data={"password": "mal"}).text
-    assert "Todavía no hay casas" in c.post("/login", data={"password": "secreto"}).text
+    assert "Iniciá sesión" in c.get("/login").text
+
+
+def test_bad_login(main, monkeypatch):
+    monkeypatch.setattr(main.time, "sleep", lambda s: None)
+    r = TestClient(main.app).post("/login", data={"email": "admin", "password": "nope"})
+    assert r.status_code == 401 and "incorrectos" in r.text
+
+
+def test_generated_admin_password(env, monkeypatch):
+    monkeypatch.delenv("ADMIN_PASSWORD")
+    assert len(db.init()) >= 12  # first start creates admin and returns the password
+    assert db.init() is None  # only once
+
+
+def test_logout(admin):
+    admin.post("/logout")
+    assert admin.get("/", follow_redirects=False).status_code == 303
+
+
+def test_change_password(admin, main):
+    r = admin.post("/account/password", data={"current": "wrong", "new": "whatever-1"})
+    assert "err=bad_current" in str(r.url)
+    r = admin.post("/account/password", data={"current": ADMIN_PW, "new": "short"})
+    assert "err=short_password" in str(r.url)
+    admin.post("/account/password", data={"current": ADMIN_PW, "new": "new-admin-pass"})
+    login(TestClient(main.app), "admin", "new-admin-pass")
+
+
+# --- admin ---------------------------------------------------------------------
+
+
+def test_only_admin_manages_users(users):
+    ana, _ = users
+    assert ana.post("/admin/users", data={"name": "X", "email": "x@x.com", "password": "12345678"}).status_code == 403
+    assert ana.post("/settings/weights", data={"ubicacion": "5"}).status_code == 403
+    page = ana.get("/settings").text
+    assert 'id="users"' not in page and "Mi cuenta" in page
+
+
+def test_admin_user_management(admin, users):
+    page = admin.get("/settings").text
+    assert "ana@x.com" in page and "beto@x.com" in page
+    r = admin.post("/admin/users", data={"name": "Otra", "email": "ANA@x.com", "password": "12345678"})
+    assert "err=email_taken" in str(r.url)
+    r = admin.post("/admin/users/1/delete")
+    assert "err=cannot_delete_self" in str(r.url)
+    # Admin can't demote themselves.
+    admin.post("/admin/users/1", data={"name": "Admin", "email": "admin", "is_admin": ""})
+    assert 'id="users"' in admin.get("/settings").text
+
+
+def test_deleted_user_is_logged_out_and_ratings_removed(admin, users):
+    ana, beto = users
+    h = add_house(ana)
+    beto.post(f"/houses/{h}/scores", data={"r3_ubicacion": "5"})
+    admin.post("/admin/users/3/delete")
+    assert beto.get("/", follow_redirects=False).status_code == 303
+    assert ana.post(f"/houses/{h}/scores", data={}, headers=JSON).json()["overall"] is None
+
+
+# --- ratings -------------------------------------------------------------------
+
+
+def test_cannot_change_other_users_ratings(users):
+    ana, beto = users
+    h = add_house(ana)
+    ana.post(f"/houses/{h}/scores", data={"r2_ubicacion": "8"})
+    # Beto tries to overwrite Ana's score and to clear it; only his own row counts.
+    s = beto.post(f"/houses/{h}/scores", data={"r2_ubicacion": "1", "r3_ubicacion": "4"}, headers=JSON).json()
+    assert s["topics"]["ubicacion"] == 6  # (8 + 4) / 2
+    s = beto.post(f"/houses/{h}/scores", data={"r3_ubicacion": "4"}, headers=JSON).json()
+    assert s["topics"]["ubicacion"] == 6  # Ana's 8 was not cleared by Beto's form
+
+
+def test_detail_shows_own_stars_editable_others_read_only(users):
+    ana, beto = users
+    h = add_house(ana)
+    page = beto.get(f"/houses/{h}").text
+    assert 'name="r3_ubicacion"' in page and 'name="r2_ubicacion"' not in page
+    assert "Solo Ana puede cambiar" in page
+
+
+def test_admin_without_rating_cannot_rate(admin, users):
+    h = add_house(admin)
+    s = admin.post(f"/houses/{h}/scores", data={"r1_ubicacion": "9", "supermercado": "1"}, headers=JSON).json()
+    assert s["overall"] is None and s["amenities_yes"] == 1
+
+
+def test_rating_and_ranking_order(users):
+    ana, beto = users
+    a = add_house(ana, title="Casa A", price="150.000")
+    b = add_house(ana, title="Casa B")
+    ana.post(f"/houses/{a}/scores", data={"r2_ubicacion": "4", "status": "activa"})
+    s = ana.post(f"/houses/{b}/scores", data={"r2_ubicacion": "9", "r2_vecindario": "7", "supermercado": "1",
+                                               "plaza": "0", "status": "favorita"}, headers=JSON).json()
+    assert s["overall"] == 8  # unrated topics are ignored, not counted as zero
+    assert s["amenities_yes"] == 1
+    page = ana.get("/").text
+    assert page.index("Casa B") < page.index("Casa A")
+    assert "USD 150.000" in page
+    assert "Te falta puntuar" in page  # neither house has all four topics from Ana
+
+
+def test_zero_is_a_score_and_empty_clears(users):
+    ana, _ = users
+    h = add_house(ana)
+    assert ana.post(f"/houses/{h}/scores", data={"r2_ubicacion": "0"}, headers=JSON).json()["overall"] == 0
+    assert ana.post(f"/houses/{h}/scores", data={"r2_ubicacion": ""}, headers=JSON).json()["overall"] is None
+    assert ana.post(f"/houses/{h}/scores", data={"r2_ubicacion": "11"}, headers=JSON).json()["overall"] is None
+
+
+def test_weights_change_overall(admin, users):
+    ana, _ = users
+    h = add_house(ana)
+    admin.post("/settings/weights", data={"ubicacion": "3", "vecindario": "1", "construccion": "1", "antiguedad": "1"})
+    s = ana.post(f"/houses/{h}/scores", data={"r2_ubicacion": "10", "r2_construccion": "0"}, headers=JSON).json()
+    assert s["overall"] == 7.5
+
+
+def test_visited_flag_and_filter(users):
+    ana, _ = users
+    v = add_house(ana, title="Fuimos")
+    add_house(ana, title="Online")
+    ana.post(f"/houses/{v}/scores", data={"visitada": "1"})
+    page = ana.get("/").text
+    assert "ribbon visited" in page and "ribbon online" in page
+    only = ana.get("/?visitada=si").text
+    assert "Fuimos" in only and "Online" not in only
+    assert "Online" in ana.get("/?visitada=no").text and "Fuimos" not in ana.get("/?visitada=no").text
+
+
+def test_discarded_hidden_by_default(users):
+    ana, _ = users
+    h = add_house(ana, title="Descartable")
+    ana.post(f"/houses/{h}/scores", data={"status": "descartada"})
+    assert "Descartable" not in ana.get("/").text
+    assert "Descartable" in ana.get("/?all=1").text
+
+
+def test_edit_and_delete(users):
+    ana, _ = users
+    h = add_house(ana)
+    ana.post(f"/houses/{h}", data={"title": "Renombrada", "currency": "ARS", "price": "1000"})
+    assert "Renombrada" in ana.get(f"/houses/{h}").text
+    ana.post(f"/houses/{h}/delete")
+    assert ana.get(f"/houses/{h}").status_code == 404
+
+
+def test_exports(users):
+    ana, _ = users
+    h = add_house(ana, title="Exportada")
+    ana.post(f"/houses/{h}/scores", data={"r2_vecindario": "8", "colegio": "1", "visitada": "1"})
+    data = ana.get("/export.json").json()
+    assert data[0]["title"] == "Exportada" and data[0]["Ana_vecindario"] == 8
+    assert data[0]["colegio"] is True and data[0]["visitada"] is True
+    assert "Ana_vecindario" in ana.get("/export.csv").text
+
+
+# --- migration -----------------------------------------------------------------
+
+
+def test_migration_from_v1_keeps_data(env, monkeypatch):
+    conn = sqlite3.connect(env / "casa-ranking.db")
+    conn.executescript(db.SCHEMA_V1)
+    conn.executescript("""
+        INSERT INTO raters (id, name, position) VALUES (1, 'Matias', 0), (2, 'Analia', 1);
+        INSERT INTO houses (id, title, status, supermercado) VALUES (2, 'Casa vieja', 'visitada', 1);
+        INSERT INTO ratings (house_id, rater_id, ubicacion, construccion) VALUES (2, 1, 7, 5), (2, 2, 9, NULL);
+        INSERT INTO settings VALUES ('weight_ubicacion', '2');
+        PRAGMA user_version = 1;
+    """)
+    conn.commit()
+    conn.close()
+    main = load_app(monkeypatch)
+    admin = login(TestClient(main.app), "admin", ADMIN_PW)
+    # Existing raters keep their ratings; admin gives them a login.
+    admin.post("/admin/users/1", data={"name": "Matias", "email": "m@x.com", "password": "secret-123", "can_rate": "1"})
+    matias = login(TestClient(main.app), "m@x.com", "secret-123")
+    with db.session() as c:
+        h = c.execute("SELECT * FROM houses WHERE id = 2").fetchone()
+        assert h["visitada"] == 1 and h["status"] == "activa" and h["supermercado"] == 1
+        assert c.execute("SELECT COUNT(*) FROM ratings").fetchone()[0] == 2
+        assert db.get_setting(c, "weight_ubicacion") == "2"
+    page = matias.get("/houses/2").text
+    assert 'name="r1_ubicacion" value="7" checked' in page
+    assert "Solo Analia puede cambiar" in page
+
+
+# --- misc ----------------------------------------------------------------------
+
+
+def test_english_toggle(admin):
+    assert "Ranking" in admin.get("/lang/en?next=/").text
+    assert 'lang="en"' in admin.get("/").text
+
+
+def test_lang_redirect_rejects_external_urls(main):
+    r = TestClient(main.app).get("/lang/en?next=//evil.example", follow_redirects=False)
+    assert r.headers["location"] == "/"
 
 
 def test_meta_parser():
@@ -126,6 +234,5 @@ def test_meta_parser():
     assert p.meta["og:title"] == "Casa linda" and p.meta["og:image"] == "/img.jpg" and p.title == "Fallback"
 
 
-def test_static_assets_are_versioned(client):
-    html = client.get("/").text
-    assert re.search(r'/static/style\.css\?v=[\d.]+', html)
+def test_static_assets_are_versioned(admin):
+    assert re.search(r'/static/style\.css\?v=[\d.]+', admin.get("/").text)

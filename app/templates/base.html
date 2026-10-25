@@ -2,31 +2,63 @@
 <html lang="{{ lang }}">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#b4532a">
   <title>{% block title %}{{ t('app_name') }}{% endblock %}</title>
+  <script>
+    // Apply the saved theme before first paint to avoid a flash.
+    try { var th = localStorage.getItem("theme"); if (th === "light" || th === "dark") document.documentElement.dataset.theme = th; } catch (e) {}
+  </script>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/style.css?v={{ version }}">
   <script src="/static/app.js?v={{ version }}" defer></script>
 </head>
-<body>
+<body class="{% if me %}authed{% endif %}">
 <header class="topbar">
   <a class="brand" href="/"><img src="/static/favicon.svg" alt="" width="28" height="28"><span>{{ t('app_name') }}</span></a>
-  {% if path != "/login" %}<nav class="nav">
+  {% if me %}
+  <nav class="nav">
     <a href="/" {% if path == '/' %}aria-current="page"{% endif %}>{{ t('nav_ranking') }}</a>
     <a href="/compare" {% if path == '/compare' %}aria-current="page"{% endif %}>{{ t('nav_compare') }}</a>
     <a href="/settings" {% if path == '/settings' %}aria-current="page"{% endif %}>{{ t('nav_settings') }}</a>
-  </nav>{% endif %}
+  </nav>
+  {% endif %}
   <div class="topbar-end">
+    <button type="button" class="icon-btn theme-toggle" data-theme-toggle
+            data-labels='{"auto": "{{ t('theme') }}: {{ t('theme_auto') }}", "light": "{{ t('theme') }}: {{ t('theme_light') }}", "dark": "{{ t('theme') }}: {{ t('theme_dark') }}"}'
+            aria-label="{{ t('theme') }}" title="{{ t('theme') }}">
+      <svg class="ic-auto" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></svg>
+      <svg class="ic-light" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5" fill="currentColor"/><g stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></g></svg>
+      <svg class="ic-dark" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" fill="currentColor"/></svg>
+    </button>
     <div class="lang" role="group" aria-label="{{ t('language') }}">
       {% for l in langs %}<a href="/lang/{{ l }}?next={{ path }}" {% if l == lang %}aria-current="true"{% endif %}>{{ l|upper }}</a>{% endfor %}
     </div>
-    {% if auth_enabled %}<form method="post" action="/logout"><button class="btn ghost small">{{ t('logout') }}</button></form>{% endif %}
+    {% if me %}
+    <span class="who" title="{{ t('signed_in_as') }} {{ me.email }}"><span class="avatar">{{ me.name[:1]|upper }}</span><span class="who-name">{{ me.name }}</span></span>
+    <form method="post" action="/logout"><button class="btn ghost small">{{ t('logout') }}</button></form>
+    {% endif %}
   </div>
 </header>
 <main class="wrap">
 {% block content %}{% endblock %}
 </main>
 <footer class="foot">Casa Ranking v{{ version }}</footer>
+{% if me %}
+<nav class="tabbar" aria-label="{{ t('nav_ranking') }}">
+  <a href="/" {% if path == '/' %}aria-current="page"{% endif %}>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V10M12 20V4M19 20v-7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" fill="none"/></svg>
+    <span>{{ t('nav_ranking') }}</span></a>
+  <a href="/compare" {% if path == '/compare' %}aria-current="page"{% endif %}>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16M10 4v16" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
+    <span>{{ t('nav_compare') }}</span></a>
+  <a href="/houses/new" class="tab-add" {% if path == '/houses/new' %}aria-current="page"{% endif %}>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg>
+    <span>{{ t('nav_add_short') }}</span></a>
+  <a href="/settings" {% if path == '/settings' %}aria-current="page"{% endif %}>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 21a8 8 0 0 1 16 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    <span>{{ t('nav_settings') }}</span></a>
+</nav>
+{% endif %}
 </body>
 </html>

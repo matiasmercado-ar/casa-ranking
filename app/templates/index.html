@@ -6,13 +6,29 @@
     <h1>{{ t('nav_ranking') }}</h1>
     <p class="muted">{{ t('tagline') }}</p>
   </div>
-  <a class="btn primary" href="/houses/new">＋ {{ t('nav_add') }}</a>
+  <a class="btn primary hide-mobile" href="/houses/new">＋ {{ t('nav_add') }}</a>
 </section>
 
 <form class="quickadd" method="get" action="/houses/new">
   <input type="url" name="url" placeholder="https://… {{ t('link')|lower }}" aria-label="{{ t('link') }}" required>
-  <button class="btn">{{ t('nav_add') }}</button>
+  <button class="btn">{{ t('nav_add_short') }}</button>
 </form>
+
+<div class="list-head">
+  <div class="filters" role="group">
+    {% set keep = '&all=1' if show_all else '' %}
+    <a class="fchip {% if not visitada %}on{% endif %}" href="/?{{ keep }}">{{ t('filter_all') }}</a>
+    <a class="fchip {% if visitada == 'si' %}on{% endif %}" href="/?visitada=si{{ keep }}">✓ {{ t('filter_visited') }}</a>
+    <a class="fchip {% if visitada == 'no' %}on{% endif %}" href="/?visitada=no{{ keep }}">{{ t('filter_not_visited') }}</a>
+  </div>
+  <div class="list-meta">
+    <span class="muted">{{ t('houses_count', n=rows|length) }}</span>
+    {% if discarded %}
+      {% set vq = '&visitada=' ~ visitada if visitada else '' %}
+      {% if show_all %}<a href="/?{{ vq }}">{{ t('hide_discarded') }}</a>{% else %}<a href="/?all=1{{ vq }}">{{ t('show_discarded') }} ({{ discarded }})</a>{% endif %}
+    {% endif %}
+  </div>
+</div>
 
 {% if not rows %}
   <div class="empty">
@@ -21,22 +37,21 @@
     <p class="muted">{{ t('empty_body') }}</p>
   </div>
 {% else %}
-  <div class="list-head">
-    <span class="muted">{{ t('houses_count', n=rows|length) }}</span>
-    {% if discarded %}
-      {% if show_all %}<a href="/">{{ t('hide_discarded') }}</a>{% else %}<a href="/?all=1">{{ t('show_discarded') }} ({{ discarded }})</a>{% endif %}
-    {% endif %}
-  </div>
   <ol class="cards">
   {% for r in rows %}{% set h = r.house %}
-    <li class="card status-{{ h.status }}">
+    <li class="card status-{{ h.status }} rank-{{ r.rank }}">
       <a class="card-link" href="/houses/{{ h.id }}" aria-label="{{ h.title or t('untitled') }}"></a>
       <div class="rank">#{{ r.rank }}</div>
-      <div class="thumb">{% if h.image_url %}<img src="{{ h.image_url }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% else %}<span>🏠</span>{% endif %}</div>
+      <div class="thumb">
+        {% if h.image_url %}<img src="{{ h.image_url }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% else %}<span>🏠</span>{% endif %}
+        {% if h.visitada %}<span class="ribbon visited">✓ {{ t('visitada') }}</span>
+        {% else %}<span class="ribbon online">{{ t('not_visited') }}</span>{% endif %}
+      </div>
       <div class="card-body">
         <div class="card-title">
           <h2>{{ h.title or t('untitled') }}</h2>
           {% if h.status != 'activa' %}<span class="pill {{ h.status }}">{{ t(h.status) }}</span>{% endif %}
+          {% if r.pending_me %}<span class="pill pending">● {{ t('pending_me') }}</span>{% endif %}
         </div>
         <p class="muted small">{{ h.address }}{% if h.address and h.price is not none %} · {% endif %}{{ price(h) }}</p>
         <div class="bars">{% for tp in TOPICS %}{{ bar(t(tp), r.topics[tp]) }}{% endfor %}</div>

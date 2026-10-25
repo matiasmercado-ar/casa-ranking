@@ -1,10 +1,13 @@
 {% extends "base.html" %}
+{% block title %}{{ t('login_title') }} · {{ t('app_name') }}{% endblock %}
 {% block content %}
 <form class="panel form login" method="post" action="/login">
-  <div class="login-logo"><img src="/static/favicon.svg" alt="" width="56" height="56"></div>
+  <div class="login-logo"><img src="/static/favicon.svg" alt="" width="64" height="64"></div>
   <h1>{{ t('app_name') }}</h1>
-  <label>{{ t('password') }}<input type="password" name="password" autofocus required autocomplete="current-password"></label>
-  {% if error %}<p class="error">{{ t('bad_password') }}</p>{% endif %}
+  <p class="muted">{{ t('login_title') }}</p>
+  <label>{{ t('email_or_user') }}<input type="text" name="email" value="{{ email }}" autofocus required autocomplete="username" autocapitalize="none" spellcheck="false"></label>
+  <label>{{ t('password') }}<input type="password" name="password" required autocomplete="current-password"></label>
+  {% if error %}<p class="flash err" role="alert">{{ t('bad_password') }}</p>{% endif %}
   <button class="btn primary">{{ t('login') }}</button>
 </form>
 {% endblock %}

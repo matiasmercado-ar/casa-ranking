@@ -1,23 +1,95 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>{{ t('nav_settings') }}</h1>
+{% if msg %}<p class="flash ok" role="status">{{ t('msg_' ~ msg) }}</p>{% endif %}
+{% if err %}<p class="flash err" role="alert">{{ t('err_' ~ err) }}</p>{% endif %}
 
-<form class="panel form" method="post" action="/settings/raters">
-  <h2>{{ t('raters') }}</h2>
-  <p class="muted small">{{ t('raters_hint') }}</p>
-  {% for r in raters %}
-  <div class="row center">
-    <input class="grow" type="text" name="name_{{ r.id }}" value="{{ r.name }}" maxlength="40" aria-label="{{ t('new_rater_placeholder') }}">
-    <label class="inline small"><input type="checkbox" name="remove_{{ r.id }}"> {{ t('delete') }}</label>
-  </div>
-  {% endfor %}
-  <div class="row center">
-    <input class="grow" type="text" name="new_name" placeholder="＋ {{ t('add_rater') }}" maxlength="40">
-  </div>
-  <div class="actions"><button class="btn primary">{{ t('save') }}</button></div>
+<div class="settings-grid">
+<form id="account" class="panel form" method="post" action="/account/password">
+  <h2>{{ t('account') }}</h2>
+  <p class="muted small">{{ t('signed_in_as') }} <strong>{{ me.name }}</strong> · {{ me.email }}{% if me.is_admin %} · <span class="pill">{{ t('admin_badge') }}</span>{% endif %}</p>
+  <label>{{ t('current_password') }}<input type="password" name="current" required autocomplete="current-password"></label>
+  <label>{{ t('new_password') }}<input type="password" name="new" required minlength="8" autocomplete="new-password"></label>
+  <div class="actions"><button class="btn primary">{{ t('change_password') }}</button></div>
 </form>
 
-<form class="panel form" method="post" action="/settings/weights">
+<section class="panel">
+  <h2>{{ t('theme') }}</h2>
+  <div class="seg theme-seg" data-theme-seg>
+    {% for th in ['auto', 'light', 'dark'] %}
+    <input type="radio" id="th_{{ th }}" name="theme" value="{{ th }}">
+    <label for="th_{{ th }}">{{ t('theme_' ~ th) }}</label>
+    {% endfor %}
+  </div>
+  <h2>{{ t('language') }}</h2>
+  <div class="actions">
+    <a class="btn {% if lang == 'es' %}primary{% endif %}" href="/lang/es?next=/settings">Español</a>
+    <a class="btn {% if lang == 'en' %}primary{% endif %}" href="/lang/en?next=/settings">English</a>
+  </div>
+  <h2>{{ t('backup') }}</h2>
+  <p class="muted small">{{ t('backup_hint') }}</p>
+  <div class="actions">
+    <a class="btn" href="/export.csv">CSV</a>
+    <a class="btn" href="/export.json">JSON</a>
+  </div>
+</section>
+</div>
+
+{% if me.is_admin %}
+<section id="users" class="panel">
+  <h2>{{ t('users') }}</h2>
+  <p class="muted small">{{ t('users_hint') }}</p>
+  <div class="users">
+  {% for u in users %}
+    <details class="user" {% if not u.email or not u.password_hash %}open{% endif %}>
+      <summary>
+        <span class="avatar">{{ u.name[:1]|upper }}</span>
+        <span class="user-main"><strong>{{ u.name }}</strong>{% if u.id == me.id %} <small class="muted">({{ t('you') }})</small>{% endif %}
+          <small class="muted">{{ u.email or '—' }}</small></span>
+        <span class="user-tags">
+          {% if u.is_admin %}<span class="pill">{{ t('admin_badge') }}</span>{% endif %}
+          {% if u.can_rate %}<span class="pill visitada">★ {{ t('can_rate') }}</span>{% endif %}
+          {% if not u.email or not u.password_hash %}<span class="pill pending">{{ t('no_login_yet') }}</span>{% endif %}
+        </span>
+      </summary>
+      <form class="form user-form" method="post" action="/admin/users/{{ u.id }}">
+        <div class="row">
+          <label class="grow">{{ t('name') }}<input type="text" name="name" value="{{ u.name }}" maxlength="40" required></label>
+          <label class="grow">{{ t('email_or_user') }}<input type="text" name="email" value="{{ u.email or '' }}" maxlength="120" required autocomplete="off"></label>
+          <label class="grow">{{ t('new_password_opt') }}<input type="password" name="password" minlength="8" autocomplete="new-password" {% if not u.password_hash %}required{% endif %}></label>
+        </div>
+        <div class="row center">
+          <label class="inline"><input type="checkbox" name="can_rate" value="1" {% if u.can_rate %}checked{% endif %}> {{ t('can_rate') }}</label>
+          <label class="inline"><input type="checkbox" name="is_admin" value="1" {% if u.is_admin %}checked{% endif %} {% if u.id == me.id %}disabled{% endif %}> {{ t('is_admin') }}</label>
+        </div>
+        <div class="actions">
+          <button class="btn primary">{{ t('save') }}</button>
+          {% if u.id != me.id %}
+          <button class="btn danger-btn" formaction="/admin/users/{{ u.id }}/delete" formnovalidate
+                  onclick="return confirm('{{ t('delete_user_confirm') }}')">{{ t('delete') }}</button>
+          {% endif %}
+        </div>
+      </form>
+    </details>
+  {% endfor %}
+  </div>
+
+  <form class="form add-user" method="post" action="/admin/users">
+    <h3>＋ {{ t('add_user') }}</h3>
+    <div class="row">
+      <label class="grow">{{ t('name') }}<input type="text" name="name" maxlength="40" required></label>
+      <label class="grow">{{ t('email') }}<input type="email" name="email" maxlength="120" required autocomplete="off"></label>
+      <label class="grow">{{ t('password') }}<input type="password" name="password" minlength="8" required autocomplete="new-password"></label>
+    </div>
+    <div class="row center">
+      <label class="inline"><input type="checkbox" name="can_rate" value="1" checked> {{ t('can_rate') }}</label>
+      <label class="inline"><input type="checkbox" name="is_admin" value="1"> {{ t('is_admin') }}</label>
+    </div>
+    <div class="actions"><button class="btn primary">{{ t('add_user') }}</button></div>
+  </form>
+</section>
+
+<form id="weights" class="panel form" method="post" action="/settings/weights">
   <h2>{{ t('weights') }}</h2>
   <p class="muted small">{{ t('weights_hint') }}</p>
   <div class="row">
@@ -27,21 +99,5 @@
   </div>
   <div class="actions"><button class="btn primary">{{ t('save') }}</button></div>
 </form>
-
-<section class="panel">
-  <h2>{{ t('language') }}</h2>
-  <div class="actions">
-    <a class="btn {% if lang == 'es' %}primary{% endif %}" href="/lang/es?next=/settings">Español</a>
-    <a class="btn {% if lang == 'en' %}primary{% endif %}" href="/lang/en?next=/settings">English</a>
-  </div>
-</section>
-
-<section class="panel">
-  <h2>{{ t('backup') }}</h2>
-  <p class="muted small">{{ t('backup_hint') }}</p>
-  <div class="actions">
-    <a class="btn" href="/export.csv">CSV</a>
-    <a class="btn" href="/export.json">JSON</a>
-  </div>
-</section>
+{% endif %}
 {% endblock %}

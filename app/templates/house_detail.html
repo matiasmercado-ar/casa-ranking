@@ -23,20 +23,31 @@
 </section>
 
 <form id="scores" class="panel" method="post" action="/houses/{{ house.id }}/scores" data-saved="{{ t('saved') }}">
+  <label class="visit-toggle">
+    <input type="checkbox" name="visitada" value="1" {% if house.visitada %}checked{% endif %}>
+    <span class="visit-switch" aria-hidden="true"></span>
+    <span class="visit-text">
+      <strong class="visit-yes">✓ {{ t('visitada') }}</strong>
+      <strong class="visit-no">{{ t('visitada_q') }}</strong>
+      <small class="muted">{{ t('visitada_hint') }}</small>
+    </span>
+  </label>
+
   <div class="panel-head">
     <h2>{{ t('ratings') }}</h2>
     <span class="save-state small muted" aria-live="polite"></span>
   </div>
-  <p class="muted small">{{ t('ratings_hint') }}</p>
+  <p class="muted small">{% if me.can_rate %}{{ t('ratings_hint') }}{% else %}{{ t('cannot_rate') }}{% endif %}</p>
 
   {% for tp in TOPICS %}
   <fieldset class="topic">
     <legend>{{ t(tp) }}{% if tp == 'antiguedad' %} <small class="muted">({{ t('antiguedad_hint') }})</small>{% endif %}
       <span class="topic-avg" data-topic="{{ tp }}">{{ '%.1f'|format(scores.topics[tp]) if scores.topics[tp] is not none else '–' }}</span>
     </legend>
-    {% for rater in raters %}{% set cur = by_rater[rater.id][tp] if rater.id in by_rater else none %}{% set name = 'r%d_%s'|format(rater.id, tp) %}
-    <div class="rate-row">
-      <span class="rater">{{ rater.name }}</span>
+    {% for rater in raters %}{% set cur = by_rater[rater.id][tp] if rater.id in by_rater else none %}
+    {% if rater.id == me.id %}{% set name = 'r%d_%s'|format(rater.id, tp) %}
+    <div class="rate-row mine">
+      <span class="rater">{{ rater.name }} <small class="muted">({{ t('you') }})</small></span>
       <div class="stars" role="radiogroup" aria-label="{{ rater.name }} – {{ t(tp) }}">
         {% for v in range(10, 0, -1) %}
           <input type="radio" id="{{ name }}_{{ v }}" name="{{ name }}" value="{{ v }}" {% if cur == v %}checked{% endif %}>
@@ -49,6 +60,16 @@
       </div>
       <output class="rate-val">{{ cur if cur is not none else '–' }}</output>
     </div>
+    {% else %}
+    <div class="rate-row other" title="{{ t('read_only', name=rater.name) }}">
+      <span class="rater">{{ rater.name }}</span>
+      <div class="stars-ro" aria-label="{{ rater.name }}: {{ cur if cur is not none else '–' }}/10">
+        {% for v in range(1, 11) %}<span class="{{ 'on' if cur is not none and v <= cur else '' }}">★</span>{% endfor %}
+        <span class="lock" aria-hidden="true">🔒</span>
+      </div>
+      <output class="rate-val">{{ cur if cur is not none else '–' }}</output>
+    </div>
+    {% endif %}
     {% endfor %}
   </fieldset>
   {% endfor %}

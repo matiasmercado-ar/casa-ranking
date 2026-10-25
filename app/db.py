@@ -1,10 +1,13 @@
 """SQLite storage. Plain sqlite3, schema versioned with PRAGMA user_version."""
+import hashlib
+import hmac
 import os
+import secrets
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
-TOPICS = ("ubicacion", "construccion", "antiguedad")
+TOPICS = ("ubicacion", "vecindario", "construccion", "antiguedad")
 FEATURES = (
     "mejorable",
     "supermercado",
@@ -17,10 +20,12 @@ FEATURES = (
 )
 # "mejorable" is informational: it is not counted as a nearby amenity.
 AMENITIES = tuple(f for f in FEATURES if f != "mejorable")
-STATUSES = ("activa", "visitada", "favorita", "descartada")
+STATUSES = ("activa", "favorita", "descartada")
 
-SCHEMA = f"""
-CREATE TABLE IF NOT EXISTS houses (
+# Version 1 as first released; later versions are migrations on top of it so
+# fresh installs and upgraded ones always end up with the same schema.
+SCHEMA_V1 = """
+CREATE TABLE houses (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     url TEXT NOT NULL DEFAULT '',
     title TEXT NOT NULL DEFAULT '',
@@ -30,26 +35,43 @@ CREATE TABLE IF NOT EXISTS houses (
     image_url TEXT NOT NULL DEFAULT '',
     notes TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'activa',
-    {", ".join(f"{f} INTEGER" for f in FEATURES)},
+    mejorable INTEGER, supermercado INTEGER, colegio INTEGER, transporte INTEGER,
+    gimnasio INTEGER, ciclovia INTEGER, plaza INTEGER, hospital INTEGER,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
-CREATE TABLE IF NOT EXISTS raters (
+CREATE TABLE raters (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     position INTEGER NOT NULL DEFAULT 0
 );
-CREATE TABLE IF NOT EXISTS ratings (
+CREATE TABLE ratings (
     house_id INTEGER NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
     rater_id INTEGER NOT NULL REFERENCES raters(id) ON DELETE CASCADE,
-    {", ".join(f"{t} INTEGER CHECK ({t} BETWEEN 0 AND 10)" for t in TOPICS)},
+    ubicacion INTEGER CHECK (ubicacion BETWEEN 0 AND 10),
+    construccion INTEGER CHECK (construccion BETWEEN 0 AND 10),
+    antiguedad INTEGER CHECK (antiguedad BETWEEN 0 AND 10),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (house_id, rater_id)
 );
-CREATE TABLE IF NOT EXISTS settings (
+CREATE TABLE settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+"""
+
+# v2: raters become login users, "vecindario" topic, "visitada" split out of status.
+MIGRATION_V2 = """
+ALTER TABLE raters RENAME TO users;
+ALTER TABLE ratings RENAME COLUMN rater_id TO user_id;
+ALTER TABLE users ADD COLUMN email TEXT;
+ALTER TABLE users ADD COLUMN password_hash TEXT;
+ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN can_rate INTEGER NOT NULL DEFAULT 1;
+CREATE UNIQUE INDEX users_email ON users (lower(email)) WHERE email IS NOT NULL AND email != '';
+ALTER TABLE ratings ADD COLUMN vecindario INTEGER CHECK (vecindario BETWEEN 0 AND 10);
+ALTER TABLE houses ADD COLUMN visitada INTEGER NOT NULL DEFAULT 0;
+UPDATE houses SET visitada = 1, status = 'activa' WHERE status = 'visitada';
 """
 
 
@@ -77,14 +99,46 @@ def session():
         conn.close()
 
 
-def init() -> None:
+def hash_password(password: str) -> str:
+    salt = secrets.token_bytes(16)
+    digest = hashlib.scrypt(password.encode(), salt=salt, n=2**14, r=8, p=1)
+    return f"scrypt${salt.hex()}${digest.hex()}"
+
+
+def check_password(password: str, stored: str | None) -> bool:
+    try:
+        _, salt, digest = (stored or "").split("$")
+        candidate = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt), n=2**14, r=8, p=1)
+    except ValueError:
+        return False
+    return hmac.compare_digest(candidate.hex(), digest)
+
+
+def init() -> str | None:
+    """Create or migrate the DB. Returns a generated admin password if one was created."""
     with session() as conn:
-        conn.executescript(SCHEMA)
-        if conn.execute("PRAGMA user_version").fetchone()[0] == 0:
-            names = [n.strip() for n in os.environ.get("RATERS", "").split(",") if n.strip()]
-            for i, name in enumerate(names or ["Persona 1", "Persona 2"]):
-                conn.execute("INSERT INTO raters (name, position) VALUES (?, ?)", (name, i))
-            conn.execute("PRAGMA user_version = 1")
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version == 0:
+            conn.executescript(SCHEMA_V1)
+            version = 1
+        if version == 1:
+            conn.executescript(MIGRATION_V2)
+            version = 2
+        conn.execute(f"PRAGMA user_version = {version}")
+        return ensure_admin(conn)
+
+
+def ensure_admin(conn) -> str | None:
+    if conn.execute("SELECT 1 FROM users WHERE is_admin = 1").fetchone():
+        return None
+    email = os.environ.get("ADMIN_EMAIL", "").strip() or "admin"
+    password = os.environ.get("ADMIN_PASSWORD", "") or secrets.token_urlsafe(12)
+    pos = conn.execute("SELECT COALESCE(MIN(position), 0) - 1 FROM users").fetchone()[0]
+    conn.execute(
+        "INSERT INTO users (name, email, password_hash, is_admin, can_rate, position) VALUES (?, ?, ?, 1, 0, ?)",
+        ("Admin", email, hash_password(password), pos),
+    )
+    return None if os.environ.get("ADMIN_PASSWORD") else password
 
 
 def get_setting(conn, key: str, default: str = "") -> str:

@@ -1,9 +1,11 @@
 import csv
-import hmac
 import io
 import json
+import logging
 import os
 import secrets
+import sqlite3
+import time
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request
@@ -17,10 +19,11 @@ from .db import AMENITIES, FEATURES, STATUSES, TOPICS
 from .i18n import DEFAULT_LANG, LANGS, translate
 from .scoring import house_scores, ranking, weights
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 BASE = Path(__file__).parent
-APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
 CURRENCIES = ("USD", "ARS", "EUR")
+MIN_PASSWORD = 8
+log = logging.getLogger("uvicorn.error")
 
 
 def _secret_key() -> str:
@@ -38,7 +41,10 @@ def _secret_key() -> str:
 app = FastAPI(title="Casa Ranking", version=__version__, docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
 templates = Jinja2Templates(directory=BASE / "templates")
-db.init()
+
+if (generated := db.init()):
+    log.warning("Created admin account. User: %s  Password: %s  (change it in Ajustes)",
+                os.environ.get("ADMIN_EMAIL") or "admin", generated)
 
 
 def lang_of(request: Request) -> str:
@@ -48,8 +54,14 @@ def lang_of(request: Request) -> str:
 
 @app.middleware("http")
 async def require_login(request: Request, call_next):
+    request.state.user = None
+    if (uid := request.session.get("uid")):
+        with db.session() as conn:
+            request.state.user = conn.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
+        if request.state.user is None:
+            request.session.clear()
     open_paths = ("/login", "/static/", "/healthz", "/lang/")
-    if APP_PASSWORD and not request.session.get("ok") and not request.url.path.startswith(open_paths):
+    if request.state.user is None and not request.url.path.startswith(open_paths):
         return RedirectResponse("/login", status_code=303)
     return await call_next(request)
 
@@ -58,22 +70,28 @@ async def require_login(request: Request, call_next):
 app.add_middleware(SessionMiddleware, secret_key=_secret_key(), same_site="lax", max_age=60 * 60 * 24 * 90)
 
 
-def render(request: Request, name: str, **ctx) -> HTMLResponse:
+def render(request: Request, name: str, status_code: int = 200, **ctx) -> HTMLResponse:
     lang = lang_of(request)
     ctx.update(
         lang=lang,
         langs=LANGS,
         t=lambda key, **kw: translate(key, lang, **kw),
+        me=request.state.user,
         TOPICS=TOPICS,
         FEATURES=FEATURES,
         AMENITIES=AMENITIES,
         STATUSES=STATUSES,
         CURRENCIES=CURRENCIES,
-        auth_enabled=bool(APP_PASSWORD),
         version=__version__,
         path=request.url.path,
     )
-    return templates.TemplateResponse(request, name, ctx)
+    return templates.TemplateResponse(request, name, ctx, status_code=status_code)
+
+
+def _admin(request: Request):
+    if not request.state.user["is_admin"]:
+        raise HTTPException(403)
+    return request.state.user
 
 
 def _house_or_404(conn, house_id: int):
@@ -92,6 +110,14 @@ def _tri(value) -> int | None:
     return {"1": 1, "0": 0}.get(str(value))
 
 
+def _users(conn):
+    return conn.execute("SELECT * FROM users ORDER BY position, id").fetchall()
+
+
+def _raters(conn):
+    return conn.execute("SELECT * FROM users WHERE can_rate = 1 ORDER BY position, id").fetchall()
+
+
 # --- pages -----------------------------------------------------------------
 
 
@@ -101,12 +127,18 @@ def healthz():
 
 
 @app.get("/", response_class=HTMLResponse)
-def index(request: Request, all: int = 0):
+def index(request: Request, all: int = 0, visitada: str = ""):
+    visitada = visitada if visitada in ("si", "no") else ""
     with db.session() as conn:
-        rows = ranking(conn, include_discarded=bool(all))
-        raters = conn.execute("SELECT COUNT(*) FROM raters").fetchone()[0]
+        rows = ranking(conn, include_discarded=bool(all), visited=visitada)
+        raters = len(_raters(conn))
         discarded = conn.execute("SELECT COUNT(*) FROM houses WHERE status = 'descartada'").fetchone()[0]
-    return render(request, "index.html", rows=rows, show_all=bool(all), raters=raters, discarded=discarded)
+    me = request.state.user
+    for r in rows:
+        mine = r["ratings"].get(me["id"])
+        r["pending_me"] = bool(me["can_rate"]) and (mine is None or any(mine[t] is None for t in TOPICS))
+    return render(request, "index.html", rows=rows, show_all=bool(all), raters=raters, discarded=discarded,
+                  visitada=visitada)
 
 
 @app.get("/compare", response_class=HTMLResponse)
@@ -150,11 +182,13 @@ def create_house(
 def house_detail(request: Request, house_id: int):
     with db.session() as conn:
         h = _house_or_404(conn, house_id)
-        raters = conn.execute("SELECT * FROM raters ORDER BY position, id").fetchall()
+        raters = _raters(conn)
         rows = conn.execute("SELECT * FROM ratings WHERE house_id = ?", (house_id,)).fetchall()
         scores = house_scores(h, rows, weights(conn))
-    by_rater = {r["rater_id"]: r for r in rows}
-    return render(request, "house_detail.html", house=h, raters=raters, by_rater=by_rater, scores=scores)
+    # The logged-in user's row first: it is the only one they can edit.
+    me = request.state.user
+    raters = sorted(raters, key=lambda r: r["id"] != me["id"])
+    return render(request, "house_detail.html", house=h, raters=raters, by_rater=scores["ratings"], scores=scores)
 
 
 @app.get("/houses/{house_id}/edit", response_class=HTMLResponse)
@@ -208,31 +242,38 @@ def delete_house(house_id: int):
 
 @app.post("/houses/{house_id}/scores")
 async def save_scores(request: Request, house_id: int):
-    """One form for star ratings, Yes/No features and status. Autosaved by app.js."""
+    """Own star ratings + shared Yes/No features, visited and status. Autosaved by app.js.
+
+    Only the logged-in user's ratings are read from the form: other people's
+    stars are never written here, whatever the request contains.
+    """
     form = await request.form()
+    me = request.state.user
     with db.session() as conn:
         h = _house_or_404(conn, house_id)
-        for rater in conn.execute("SELECT id FROM raters"):
+        if me["can_rate"]:
             values = {}
             for t in TOPICS:
-                raw = form.get(f"r{rater['id']}_{t}", "")
-                values[t] = int(raw) if str(raw).isdigit() and 0 <= int(raw) <= 10 else None
+                raw = str(form.get(f"r{me['id']}_{t}", ""))
+                values[t] = int(raw) if raw.isdigit() and 0 <= int(raw) <= 10 else None
             conn.execute(
-                f"INSERT INTO ratings (house_id, rater_id, {', '.join(TOPICS)}) VALUES (?, ?, ?, ?, ?) "
-                f"ON CONFLICT(house_id, rater_id) DO UPDATE SET "
+                f"INSERT INTO ratings (house_id, user_id, {', '.join(TOPICS)}) VALUES (?, ?, {', '.join('?' * len(TOPICS))}) "
+                f"ON CONFLICT(house_id, user_id) DO UPDATE SET "
                 f"{', '.join(f'{t} = excluded.{t}' for t in TOPICS)}, updated_at = datetime('now')",
-                (house_id, rater["id"], *[values[t] for t in TOPICS]),
+                (house_id, me["id"], *[values[t] for t in TOPICS]),
             )
         status = form.get("status")
         conn.execute(
-            f"UPDATE houses SET {', '.join(f'{f} = ?' for f in FEATURES)}, status = ?, "
+            f"UPDATE houses SET {', '.join(f'{f} = ?' for f in FEATURES)}, visitada = ?, status = ?, "
             f"updated_at = datetime('now') WHERE id = ?",
-            (*[_tri(form.get(f)) for f in FEATURES], status if status in STATUSES else h["status"], house_id),
+            (*[_tri(form.get(f)) for f in FEATURES], 1 if form.get("visitada") == "1" else 0,
+             status if status in STATUSES else h["status"], house_id),
         )
         h = _house_or_404(conn, house_id)
         rows = conn.execute("SELECT * FROM ratings WHERE house_id = ?", (house_id,)).fetchall()
         scores = house_scores(h, rows, weights(conn))
     if request.headers.get("accept") == "application/json":
+        scores.pop("ratings")
         return JSONResponse(scores)
     return RedirectResponse(f"/houses/{house_id}", status_code=303)
 
@@ -241,30 +282,33 @@ async def save_scores(request: Request, house_id: int):
 
 
 @app.get("/settings", response_class=HTMLResponse)
-def settings(request: Request):
+def settings(request: Request, msg: str = "", err: str = ""):
     with db.session() as conn:
-        raters = conn.execute("SELECT * FROM raters ORDER BY position, id").fetchall()
+        users = _users(conn)
         w = weights(conn)
-    return render(request, "settings.html", raters=raters, weights=w)
+    return render(request, "settings.html", users=users, weights=w, msg=msg, err=err)
 
 
-@app.post("/settings/raters")
-async def save_raters(request: Request):
-    form = await request.form()
+def _back(msg: str = "", err: str = "", anchor: str = "") -> RedirectResponse:
+    q = f"?msg={msg}" if msg else f"?err={err}" if err else ""
+    return RedirectResponse(f"/settings{q}{anchor}", status_code=303)
+
+
+@app.post("/account/password")
+def change_password(request: Request, current: str = Form(""), new: str = Form("")):
+    me = request.state.user
+    if not db.check_password(current, me["password_hash"]):
+        return _back(err="bad_current", anchor="#account")
+    if len(new) < MIN_PASSWORD:
+        return _back(err="short_password", anchor="#account")
     with db.session() as conn:
-        for r in conn.execute("SELECT id FROM raters").fetchall():
-            if form.get(f"remove_{r['id']}"):
-                conn.execute("DELETE FROM raters WHERE id = ?", (r["id"],))
-            elif (name := str(form.get(f"name_{r['id']}", "")).strip()):
-                conn.execute("UPDATE raters SET name = ? WHERE id = ?", (name[:40], r["id"]))
-        if (new := str(form.get("new_name", "")).strip()):
-            pos = conn.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM raters").fetchone()[0]
-            conn.execute("INSERT INTO raters (name, position) VALUES (?, ?)", (new[:40], pos))
-    return RedirectResponse("/settings", status_code=303)
+        conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (db.hash_password(new), me["id"]))
+    return _back(msg="password_changed", anchor="#account")
 
 
 @app.post("/settings/weights")
 async def save_weights(request: Request):
+    _admin(request)
     form = await request.form()
     with db.session() as conn:
         for t in TOPICS:
@@ -273,7 +317,73 @@ async def save_weights(request: Request):
             except ValueError:
                 value = 1.0
             db.set_setting(conn, f"weight_{t}", f"{value:g}")
-    return RedirectResponse("/settings", status_code=303)
+    return _back(msg="saved", anchor="#weights")
+
+
+@app.post("/admin/users")
+def create_user(
+    request: Request,
+    name: str = Form(""),
+    email: str = Form(""),
+    password: str = Form(""),
+    is_admin: str = Form(""),
+    can_rate: str = Form(""),
+):
+    _admin(request)
+    name, email = name.strip()[:40], email.strip().lower()[:120]
+    if not name or not email:
+        return _back(err="name_email_required", anchor="#users")
+    if len(password) < MIN_PASSWORD:
+        return _back(err="short_password", anchor="#users")
+    try:
+        with db.session() as conn:
+            pos = conn.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM users").fetchone()[0]
+            conn.execute(
+                "INSERT INTO users (name, email, password_hash, is_admin, can_rate, position) VALUES (?,?,?,?,?,?)",
+                (name, email, db.hash_password(password), int(bool(is_admin)), int(bool(can_rate)), pos),
+            )
+    except sqlite3.IntegrityError:
+        return _back(err="email_taken", anchor="#users")
+    return _back(msg="user_added", anchor="#users")
+
+
+@app.post("/admin/users/{user_id}")
+def update_user(
+    request: Request,
+    user_id: int,
+    name: str = Form(""),
+    email: str = Form(""),
+    password: str = Form(""),
+    is_admin: str = Form(""),
+    can_rate: str = Form(""),
+):
+    me = _admin(request)
+    name, email = name.strip()[:40], email.strip().lower()[:120]
+    if not name or not email:
+        return _back(err="name_email_required", anchor="#users")
+    if password and len(password) < MIN_PASSWORD:
+        return _back(err="short_password", anchor="#users")
+    # An admin can't demote themselves, so there is always at least one admin.
+    admin_flag = 1 if user_id == me["id"] else int(bool(is_admin))
+    try:
+        with db.session() as conn:
+            conn.execute("UPDATE users SET name = ?, email = ?, is_admin = ?, can_rate = ? WHERE id = ?",
+                         (name, email, admin_flag, int(bool(can_rate)), user_id))
+            if password:
+                conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (db.hash_password(password), user_id))
+    except sqlite3.IntegrityError:
+        return _back(err="email_taken", anchor="#users")
+    return _back(msg="saved", anchor="#users")
+
+
+@app.post("/admin/users/{user_id}/delete")
+def delete_user(request: Request, user_id: int):
+    me = _admin(request)
+    if user_id == me["id"]:
+        return _back(err="cannot_delete_self", anchor="#users")
+    with db.session() as conn:
+        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    return _back(msg="user_deleted", anchor="#users")
 
 
 @app.get("/lang/{code}")
@@ -288,19 +398,20 @@ def set_lang(request: Request, code: str, next: str = "/"):
 
 
 def _export_rows(conn) -> list[dict]:
-    raters = {r["id"]: r["name"] for r in conn.execute("SELECT * FROM raters")}
+    names = {u["id"]: u["name"] for u in _users(conn)}
     out = []
     for row in ranking(conn, include_discarded=True):
         h = row["house"]
         item = {"rank": row["rank"], "id": h["id"], "title": h["title"], "url": h["url"], "address": h["address"],
                 "price": h["price"], "currency": h["currency"], "status": h["status"],
+                "visitada": bool(h["visitada"]),
                 "score": round(row["overall"], 2) if row["overall"] is not None else None}
         item.update({f"avg_{t}": round(v, 2) if v is not None else None for t, v in row["topics"].items()})
         item.update({f: {1: True, 0: False}.get(h[f]) for f in FEATURES})
         item["notes"] = h["notes"]
-        for r in conn.execute("SELECT * FROM ratings WHERE house_id = ?", (h["id"],)):
+        for uid, r in row["ratings"].items():
             for t in TOPICS:
-                item[f"{raters.get(r['rater_id'], r['rater_id'])}_{t}"] = r[t]
+                item[f"{names.get(uid, uid)}_{t}"] = r[t]
         out.append(item)
     return out
 
@@ -332,17 +443,21 @@ def export_csv():
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
-    if not APP_PASSWORD:
+    if request.state.user:
         return RedirectResponse("/", status_code=303)
-    return render(request, "login.html", error=False)
+    return render(request, "login.html", error=False, email="")
 
 
 @app.post("/login", response_class=HTMLResponse)
-def login(request: Request, password: str = Form("")):
-    if APP_PASSWORD and hmac.compare_digest(password.encode(), APP_PASSWORD.encode()):
-        request.session["ok"] = True
+def login(request: Request, email: str = Form(""), password: str = Form("")):
+    with db.session() as conn:
+        user = conn.execute("SELECT * FROM users WHERE lower(email) = ?", (email.strip().lower(),)).fetchone()
+    if user and db.check_password(password, user["password_hash"]):
+        request.session.clear()
+        request.session["uid"] = user["id"]
         return RedirectResponse("/", status_code=303)
-    return render(request, "login.html", error=True)
+    time.sleep(1)  # slow down guessing
+    return render(request, "login.html", status_code=401, error=True, email=email)
 
 
 @app.post("/logout")

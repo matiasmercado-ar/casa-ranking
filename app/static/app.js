@@ -1,3 +1,27 @@
+// Theme: "auto" follows the OS; "light"/"dark" are stored per device.
+(function () {
+  const root = document.documentElement;
+  const get = () => { try { return localStorage.getItem("theme") || "auto"; } catch (e) { return "auto"; } };
+  function apply(theme) {
+    try { theme === "auto" ? localStorage.removeItem("theme") : localStorage.setItem("theme", theme); } catch (e) {}
+    if (theme === "auto") delete root.dataset.theme; else root.dataset.theme = theme;
+    root.dataset.themeChoice = theme;
+    const btn = document.querySelector("[data-theme-toggle]");
+    if (btn) {
+      const label = JSON.parse(btn.dataset.labels)[theme];
+      btn.title = label;
+      btn.setAttribute("aria-label", label);
+    }
+    document.querySelectorAll("[data-theme-seg] input").forEach((i) => (i.checked = i.value === theme));
+  }
+  apply(get());
+  const order = ["auto", "light", "dark"];
+  document.querySelector("[data-theme-toggle]")?.addEventListener("click", () => {
+    apply(order[(order.indexOf(get()) + 1) % order.length]);
+  });
+  document.querySelector("[data-theme-seg]")?.addEventListener("change", (e) => apply(e.target.value));
+})();
+
 // Progressive enhancement: the scores form works without JS (submit button in <noscript>);
 // with JS every change is autosaved and the averages refresh in place.
 (function () {

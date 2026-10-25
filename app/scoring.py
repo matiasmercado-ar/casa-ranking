@@ -29,10 +29,12 @@ def house_scores(house, ratings, w: dict[str, float]) -> dict:
         "amenities_yes": yes,
         "amenities_total": len(AMENITIES),
         "rated_by": sum(1 for r in ratings if any(r[t] is not None for t in TOPICS)),
+        "ratings": {r["user_id"]: r for r in ratings},
     }
 
 
-def ranking(conn, include_discarded: bool = False) -> list[dict]:
+def ranking(conn, include_discarded: bool = False, visited: str = "") -> list[dict]:
+    """visited: "" = all, "si" = only visited, "no" = only not visited."""
     w = weights(conn)
     houses = conn.execute("SELECT * FROM houses ORDER BY created_at").fetchall()
     by_house: dict[int, list] = {}
@@ -54,4 +56,7 @@ def ranking(conn, include_discarded: bool = False) -> list[dict]:
     )
     for i, r in enumerate(rows, 1):
         r["rank"] = i
+    # Filter after numbering so a house keeps its overall position.
+    if visited:
+        rows = [r for r in rows if bool(r["house"]["visitada"]) == (visited == "si")]
     return rows

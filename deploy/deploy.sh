@@ -9,6 +9,12 @@ TARGET=root@$HOST_IP
 
 rsync -az --delete --exclude .git --exclude .venv --exclude data --exclude .env \
   --exclude 'deploy/deploy.env' --exclude __pycache__ --exclude .pytest_cache ./ "$TARGET:/opt/casa-ranking/"
+# Consistent SQLite snapshot before the new version (and any migration) starts; keep the last 10.
+ssh "$TARGET" 'cd /opt/casa-ranking && mkdir -p data/backups && chown 10001 data/backups && \
+  docker compose exec -T casa-ranking python -c "import sqlite3, time; s = sqlite3.connect(\"/data/casa-ranking.db\"); \
+d = sqlite3.connect(time.strftime(\"/data/backups/casa-ranking-%Y%m%d-%H%M%S.db\")); s.backup(d)" \
+  && echo "DB backup: $(ls -t data/backups | head -1)" || echo "DB backup FAILED or no running container"; \
+  ls -t data/backups/*.db 2>/dev/null | tail -n +11 | xargs -r rm --'
 ssh "$TARGET" "cd /opt/casa-ranking && touch .env && \
   (grep -q '^PORT=' .env || echo 'PORT=$APP_PORT' >> .env) && \
   docker compose up -d --build --remove-orphans && docker image prune -f >/dev/null"
