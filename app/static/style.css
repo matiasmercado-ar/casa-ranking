@@ -319,6 +319,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, .btn:focus-vi
 #weights .row .grow { flex-basis: 120px; }
 .flash { padding: 10px 14px; border-radius: 10px; font-weight: 600; }
 .flash.ok { background: color-mix(in srgb, var(--yes) 14%, transparent); color: var(--yes); }
+.flash.warn { background: color-mix(in srgb, var(--star) 20%, transparent); color: var(--text); }
 .flash.err { background: color-mix(in srgb, var(--no) 14%, transparent); color: var(--no); }
 .users { display: grid; gap: 8px; margin-bottom: 16px; }
 .user { border: 1px solid var(--border); border-radius: 12px; background: var(--bg); }
@@ -333,6 +334,15 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, .btn:focus-vi
 .add-user h3 { margin: 8px 0 12px; font-size: 1rem; }
 .theme-seg { margin-bottom: 4px; }
 .login-logo { margin-bottom: 4px; }
+
+/* import */
+.btn.busy { opacity: .75; cursor: progress; white-space: normal; }
+.btn.busy::before { content: ""; width: 14px; height: 14px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin .7s linear infinite; flex-shrink: 0; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.import { max-width: 640px; }
+.import input { font-size: 1.05rem; }
+.manual { max-width: 640px; }
+.manual summary { cursor: pointer; color: var(--accent); font-weight: 600; padding: 4px 0; }
 
 /* questions */
 .q-group { font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 14px 0 2px; }

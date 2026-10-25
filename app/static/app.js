@@ -22,6 +22,17 @@
   document.querySelector("[data-theme-seg]")?.addEventListener("change", (e) => apply(e.target.value));
 })();
 
+// Forms that read a listing take a second or two: say so and block double submits.
+document.querySelectorAll("form[data-busy]").forEach((form) => {
+  form.addEventListener("submit", () => {
+    const btn = form.querySelector("button");
+    if (!btn) return;
+    btn.disabled = true;
+    btn.classList.add("busy");
+    btn.textContent = form.dataset.busy;
+  });
+});
+
 // Progressive enhancement: the scores form works without JS (submit button in <noscript>);
 // with JS every change is autosaved and the averages refresh in place.
 (function () {

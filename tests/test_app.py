@@ -4,7 +4,6 @@ import sqlite3
 from fastapi.testclient import TestClient
 
 from app import db
-from app.linkpreview import _MetaParser
 from conftest import ADMIN_PW, load_app, login
 
 JSON = {"Accept": "application/json"}
@@ -270,7 +269,7 @@ def test_migration_from_v1_keeps_data(env, monkeypatch):
         h = c.execute("SELECT * FROM houses WHERE id = 2").fetchone()
         assert h["visitada"] == 1 and h["status"] == "activa" and h["supermercado"] == 1
         assert h["currency"] == "USD" and h["pileta"] is None
-        assert c.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert c.execute("PRAGMA user_version").fetchone()[0] == 4
         assert c.execute("SELECT COUNT(*) FROM ratings").fetchone()[0] == 2
         assert db.get_setting(c, "weight_ubicacion") == "2"
     page = matias.get("/houses/2").text
@@ -291,11 +290,66 @@ def test_lang_redirect_rejects_external_urls(main):
     assert r.headers["location"] == "/"
 
 
-def test_meta_parser():
-    p = _MetaParser()
-    p.feed('<html><head><title> Fallback </title><meta property="og:title" content="Casa linda">'
-           '<meta property="og:image" content="/img.jpg"></head></html>')
-    assert p.meta["og:title"] == "Casa linda" and p.meta["og:image"] == "/img.jpg" and p.title == "Fallback"
+# --- importing from a link -------------------------------------------------------
+
+LISTING = {"site": "Inmoup", "title": "Casa en Venta", "price": 90000.0, "currency": "USD",
+           "address": "Dr. Perinetti 116, Godoy Cruz, Mendoza", "image_url": "https://img/1.jpg",
+           "lat": -32.9, "lng": -68.8, "facts": "Dormitorios: 3"}
+
+
+def test_add_from_link_fills_everything(main, users, monkeypatch):
+    ana, _ = users
+    monkeypatch.setattr(main.linkpreview, "fetch", lambda url, timeout=10.0: dict(LISTING))
+    r = ana.post("/houses", data={"url": "https://inmoup.com.ar/a/ficha/casa?btid=99#x"})
+    page = r.text
+    assert "Importado de Inmoup: foto, precio, ubicación, características (en Notas)." in page
+    assert "USD 90.000" in page and "Dr. Perinetti 116" in page and "Dormitorios: 3" in page
+    assert "https://www.google.com/maps/search/?api=1&amp;query=-32.9,-68.8" in page
+    with db.session() as c:
+        h = c.execute("SELECT * FROM houses").fetchone()
+    assert h["url"] == "https://inmoup.com.ar/a/ficha/casa" and h["image_url"] == "https://img/1.jpg"
+    # Flash shows once only.
+    assert "Importado de" not in ana.get(r.url.path).text
+
+
+def test_add_from_link_reports_missing_fields(main, users, monkeypatch):
+    ana, _ = users
+    monkeypatch.setattr(main.linkpreview, "fetch", lambda url, timeout=10.0: {"site": "Remax", "title": "X"})
+    page = ana.post("/houses", data={"url": "https://www.remax.com.ar/listings/x"}).text
+    assert "No pudimos leer: foto, precio, ubicación." in page
+
+
+def test_duplicate_link_goes_to_existing_house(main, users, monkeypatch):
+    ana, beto = users
+    monkeypatch.setattr(main.linkpreview, "fetch", lambda url, timeout=10.0: dict(LISTING))
+    first = ana.post("/houses", data={"url": "https://casa.mercadolibre.com.ar/MLA-1-x_JM#a"}, follow_redirects=False)
+    again = beto.post("/houses", data={"url": "https://casa.mercadolibre.com.ar/MLA-1-x_JM?tracking=2"},
+                      follow_redirects=False)
+    assert again.headers["location"] == first.headers["location"]
+    assert "ya estaba cargada" in beto.get(again.headers["location"]).text
+
+
+def test_typed_values_win_over_imported(main, users, monkeypatch):
+    ana, _ = users
+    monkeypatch.setattr(main.linkpreview, "fetch", lambda url, timeout=10.0: dict(LISTING))
+    ana.post("/houses", data={"url": "https://inmoup.com.ar/b", "price": "5000000", "currency": "ARS",
+                              "address": "Mi dirección"})
+    with db.session() as c:
+        h = c.execute("SELECT * FROM houses").fetchone()
+    assert (h["price"], h["currency"], h["address"]) == (5000000, "ARS", "Mi dirección")
+
+
+def test_refresh_updates_and_reports_price_change(main, users, monkeypatch):
+    ana, _ = users
+    monkeypatch.setattr(main.linkpreview, "fetch", lambda url, timeout=10.0: dict(LISTING))
+    h = int(ana.post("/houses", data={"url": "https://inmoup.com.ar/c"}, follow_redirects=False)
+            .headers["location"].rsplit("/", 1)[1])
+    monkeypatch.setattr(main.linkpreview, "fetch", lambda url, timeout=10.0: {**LISTING, "price": 85000.0})
+    page = ana.post(f"/houses/{h}/refresh-preview").text
+    assert "El precio cambió: USD 90.000 → USD 85.000" in page
+    monkeypatch.setattr(main.linkpreview, "fetch", lambda url, timeout=10.0: {})
+    page = ana.post(f"/houses/{h}/refresh-preview").text
+    assert "No pudimos leer la publicación" in page and "USD 85.000" in page
 
 
 def test_static_assets_are_versioned(admin):

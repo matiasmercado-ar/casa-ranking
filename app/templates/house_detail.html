@@ -10,8 +10,11 @@
     <p class="muted">{{ house.address }}{% if house.address and house.price is not none %} · {% endif %}<strong>{{ price(house) }}</strong></p>
     <div class="actions wrap-row">
       {% if house.url %}<a class="btn primary" href="{{ house.url }}" target="_blank" rel="noopener noreferrer">{{ t('open_listing') }} ↗</a>{% endif %}
+      {% if house.lat is not none and house.lng is not none %}{% set maps = 'https://www.google.com/maps/search/?api=1&query=%s,%s'|format(house.lat, house.lng) %}
+      {% elif house.address %}{% set maps = 'https://www.google.com/maps/search/?api=1&query=' ~ house.address|urlencode %}{% endif %}
+      {% if maps %}<a class="btn" href="{{ maps }}" target="_blank" rel="noopener noreferrer">📍 {{ t('open_map') }}</a>{% endif %}
       <a class="btn" href="/houses/{{ house.id }}/edit">{{ t('edit') }}</a>
-      {% if house.url %}<form method="post" action="/houses/{{ house.id }}/refresh-preview"><button class="btn ghost">↻ {{ t('refresh_preview') }}</button></form>{% endif %}
+      {% if house.url %}<form method="post" action="/houses/{{ house.id }}/refresh-preview" data-busy="{{ t('importing') }}"><button class="btn ghost">↻ {{ t('refresh_preview') }}</button></form>{% endif %}
     </div>
     {% if house.notes %}<p class="notes">{{ house.notes }}</p>{% endif %}
   </div>

@@ -75,6 +75,12 @@ ALTER TABLE houses ADD COLUMN pelopincho INTEGER;
 UPDATE houses SET currency = 'USD' WHERE currency NOT IN ('USD', 'ARS');
 """
 
+# v4: coordinates read from the listing, for the map link.
+MIGRATION_V4 = """
+ALTER TABLE houses ADD COLUMN lat REAL;
+ALTER TABLE houses ADD COLUMN lng REAL;
+"""
+
 
 def db_path() -> Path:
     return Path(os.environ.get("DATA_DIR", "./data")) / "casa-ranking.db"
@@ -128,6 +134,9 @@ def init() -> str | None:
         if version == 2:
             conn.executescript(MIGRATION_V3)
             version = 3
+        if version == 3:
+            conn.executescript(MIGRATION_V4)
+            version = 4
         conn.execute(f"PRAGMA user_version = {version}")
         return ensure_admin(conn)
 

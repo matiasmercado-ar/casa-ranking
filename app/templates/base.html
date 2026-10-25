@@ -41,6 +41,7 @@
   </div>
 </header>
 <main class="wrap">
+{% for f in flashes %}<p class="flash {{ 'ok' if f.kind == 'ok' else 'err' if f.kind == 'err' else 'warn' }}" role="status">{{ f.text }}</p>{% endfor %}
 {% block content %}{% endblock %}
 </main>
 <footer class="foot">Casa Ranking v{{ version }}</footer>

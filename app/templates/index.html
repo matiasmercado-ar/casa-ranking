@@ -9,9 +9,9 @@
   <a class="btn primary hide-mobile" href="/houses/new">＋ {{ t('nav_add') }}</a>
 </section>
 
-<form class="quickadd" method="get" action="/houses/new">
+<form class="quickadd" method="post" action="/houses" data-busy="{{ t('importing') }}">
   <input type="url" name="url" placeholder="https://… {{ t('link')|lower }}" aria-label="{{ t('link') }}" required>
-  <button class="btn">{{ t('nav_add_short') }}</button>
+  <button class="btn primary">{{ t('nav_add_short') }}</button>
 </form>
 
 <div class="list-head">

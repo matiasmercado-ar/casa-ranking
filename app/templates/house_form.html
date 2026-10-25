@@ -2,9 +2,19 @@
 {% block title %}{{ (house.title if house else t('nav_add')) }} · {{ t('app_name') }}{% endblock %}
 {% block content %}
 <h1>{{ t('edit') if house else t('nav_add') }}</h1>
+{% if not house %}
+<form class="panel form import" method="post" action="/houses" data-busy="{{ t('importing') }}">
+  <h2>{{ t('import_title') }}</h2>
+  <p class="muted small">{{ t('import_hint') }}</p>
+  <input type="url" name="url" value="{{ prefill_url }}" placeholder="https://…" required autofocus aria-label="{{ t('link') }}">
+  <div class="actions"><button class="btn primary">{{ t('import_btn') }}</button></div>
+</form>
+<details class="manual">
+<summary>{{ t('manual_entry') }}</summary>
+{% endif %}
 <form class="panel form" method="post" action="{{ '/houses/%d'|format(house.id) if house else '/houses' }}">
   <label>{{ t('link') }}
-    <input type="url" name="url" value="{{ house.url if house else prefill_url }}" placeholder="https://…" {% if not house %}autofocus{% endif %}>
+    <input type="url" name="url" value="{{ house.url if house else prefill_url }}" placeholder="https://…">
   </label>
   <label>{{ t('title') }}
     <input type="text" name="title" value="{{ house.title if house else '' }}" maxlength="200">
@@ -32,4 +42,5 @@
     <a class="btn ghost" href="{{ '/houses/%d'|format(house.id) if house else '/' }}">{{ t('cancel') }}</a>
   </div>
 </form>
+{% if not house %}</details>{% endif %}
 {% endblock %}

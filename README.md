@@ -25,8 +25,12 @@ together, but any number of people can rate.
   (supermarket, school, public transport, gym, bike lane, park, hospital/clinic).
 - **Weighted score**: give each topic a weight and each question an importance in Settings.
 - **Statuses**: active, favourite, discarded (discarded ones are hidden from the ranking).
-- **Link preview**: when you add a link, it tries to read the title and photo from the
-  page's Open Graph tags. Many portals block bots, so you can always type them by hand.
+- **Paste a link, get the house**: photo, price, currency, address, map coordinates and
+  key facts (bedrooms, bathrooms, m², age) are read from the listing for **Inmoup,
+  Inmoclick, MercadoLibre and Remax** (Argentina), each from its own structured data
+  (JSON-LD, embedded page state). Other sites get a best-effort Open Graph read. Pasting
+  a link that's already there takes you to that house; "Actualizar desde el link"
+  re-reads it and tells you if the price changed.
 - **Compare view**: every house and every criterion in one table.
 - **Export** to CSV (opens in Excel / Sheets) or JSON.
 - **Autosave**: ratings save as you click, no submit button.
@@ -110,7 +114,7 @@ two "10"s still order correctly. Unrated houses go last.
 
 ## Stack
 
-FastAPI, Jinja2 templates, SQLite, and a few lines of vanilla JS. No frontend build
+FastAPI, Jinja2 templates, SQLite, httpx for reading listings, and a few lines of vanilla JS. No frontend build
 step, no external services: a single ~160 MB container. Tests: `pip install -r
 requirements-dev.txt && pytest`.
 
