@@ -20,3 +20,30 @@
 {% macro price(h) -%}
 {%- if h.price is not none %}{{ h.currency }} {{ '{:,.0f}'.format(h.price).replace(',', '.') }}{% endif -%}
 {%- endmacro %}
+
+{% macro people_scores(t, raters, people) -%}
+{%- if raters|length > 1 -%}
+<span class="people" title="{{ t('people_scores') }}">
+  {%- for u in raters %}{% set s = people.get(u.id) %}
+  <span class="person {{ 'missing' if s is none }}" data-uid="{{ u.id }}" title="{{ u.name }}: {{ '%.1f'|format(s) if s is not none else t('missing_opinion', name=u.name) }}">
+    <span class="avatar xs">{{ u.name[:1]|upper }}</span><span class="person-name">{{ u.name }}</span> <span class="person-val">{{ '%.1f'|format(s) if s is not none else '–' }}</span></span>
+  {%- endfor -%}
+</span>
+{%- endif -%}
+{%- endmacro %}
+
+{# All three are rendered; CSS shows the one matching the card's data-visit, so JS can switch it. #}
+{% macro ribbon(t, visit) -%}
+<span class="ribbon visited">✓ {{ t('visitada') }}</span><span class="ribbon to-visit">📍 {{ t('a_visitar') }}</span><span class="ribbon not-visited">✗ {{ t('not_visited') }}</span>
+{%- endmacro %}
+
+{% macro to_visit_button(t, h, small=false) -%}
+<form class="to-visit-form" method="post" action="/houses/{{ h.id }}/a-visitar">
+  <input type="hidden" name="on" value="{{ 0 if h.a_visitar else 1 }}">
+  <button class="btn to-visit{% if small %} small{% endif %}{% if h.a_visitar %} on{% endif %}" aria-pressed="{{ 'true' if h.a_visitar else 'false' }}"
+          data-on="📍 {{ t('a_visitar_on') }}" data-off="📍 {{ t('a_visitar') }}"
+          title="{{ t('a_visitar_remove') if h.a_visitar else t('a_visitar_add') }}"
+          data-title-on="{{ t('a_visitar_remove') }}" data-title-off="{{ t('a_visitar_add') }}">
+    📍 {{ t('a_visitar_on') if h.a_visitar else t('a_visitar') }}</button>
+</form>
+{%- endmacro %}

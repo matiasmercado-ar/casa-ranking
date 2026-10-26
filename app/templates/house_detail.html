@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import score_badge, bar, price %}
+{% from "_macros.html" import score_badge, bar, price, people_scores, to_visit_button %}
 {% block title %}{{ house.title or t('untitled') }} · {{ t('app_name') }}{% endblock %}
 {% block content %}
 <a class="back" href="/">← {{ t('nav_ranking') }}</a>
@@ -13,6 +13,7 @@
       {% if house.lat is not none and house.lng is not none %}{% set maps = 'https://www.google.com/maps/search/?api=1&query=%s,%s'|format(house.lat, house.lng) %}
       {% elif house.address %}{% set maps = 'https://www.google.com/maps/search/?api=1&query=' ~ house.address|urlencode %}{% endif %}
       {% if maps %}<a class="btn" href="{{ maps }}" target="_blank" rel="noopener noreferrer">📍 {{ t('open_map') }}</a>{% endif %}
+      {% if not house.visitada %}{{ to_visit_button(t, house) }}{% endif %}
       <a class="btn" href="/houses/{{ house.id }}/edit">{{ t('edit') }}</a>
       {% if house.url %}<form method="post" action="/houses/{{ house.id }}/refresh-preview" data-busy="{{ t('importing') }}"><button class="btn ghost">↻ {{ t('refresh_preview') }}</button></form>{% endif %}
     </div>
@@ -21,11 +22,14 @@
   <div class="detail-score">
     <span class="small muted">{{ t('score') }}</span>
     <span id="overall">{{ score_badge(scores.overall, big=true) }}</span>
-    <span class="small muted" id="breakdown" data-tpl="{{ t('score_breakdown', base='{base}', bonus='{bonus}') }}">{% if scores.base is not none %}{{ t('score_breakdown', base='%.1f'|format(scores.base), bonus='%+.1f'|format(scores.bonus)) }}{% endif %}</span>
+    <span class="small muted" id="breakdown" data-tpl="{{ t('score_breakdown', base='{base}', q='{q}') }}">{% if scores.base is not none %}{{ t('score_breakdown', base='%.1f'|format(scores.base), q='%.1f'|format(scores.questions or 0)) }}{% endif %}</span>
+    <span id="people">{{ people_scores(t, raters|sort(attribute='position'), scores.people) }}</span>
     <span class="small muted" id="amen">{{ t('amenities') }} {{ scores.amenities_yes }}/{{ scores.amenities_total }}</span>
+    <details class="how small"><summary>{{ t('how_score') }}</summary><p class="muted">{{ t('how_score_body', share=w.share) }}</p></details>
   </div>
 </section>
 
+<div class="detail-cols">
 <form id="scores" class="panel" method="post" action="/houses/{{ house.id }}/scores" data-saved="{{ t('saved') }}">
   <label class="visit-toggle">
     <input type="checkbox" name="visitada" value="1" {% if house.visitada %}checked{% endif %}>
@@ -79,13 +83,13 @@
   {% endfor %}
 
   <h2>{{ t('features') }}</h2>
-  <p class="muted small">{{ t('q_hint') }}</p>
+  <p class="muted small">{{ t('q_hint', share=w.share) }}</p>
   {% for group, questions in [('q_house', HOUSE_QUESTIONS), ('q_nearby', NEARBY)] %}
   <h3 class="q-group">{{ t(group) }}</h3>
   <div class="features">
     {% for f in questions %}{% set imp = w['q:' ~ f] %}
     <div class="feature">
-      <span>{{ t(f) }} <small class="impact imp-{{ imp }}" title="{{ t('importance') }}">±{{ '%g'|format(BONUS_STEP * imp) }}</small></span>
+      <span>{{ t(f) }} {% if imp != 1 %}<small class="impact imp-{{ imp }}" title="{{ t('importance') }}">{{ t('imp_' ~ imp) }}</small>{% endif %}</span>
       <div class="seg" role="radiogroup" aria-label="{{ t(f) }}">
         {% for v, key in [('1', 'yes'), ('0', 'no'), ('', 'unknown')] %}
         <input type="radio" id="{{ f }}_{{ key }}" name="{{ f }}" value="{{ v }}" {% if (house[f]|string if house[f] is not none else '') == v %}checked{% endif %}>
@@ -107,6 +111,51 @@
 
   <noscript><div class="actions"><button class="btn primary">{{ t('save') }}</button></div></noscript>
 </form>
+
+{% set counts = {'online': comments|selectattr('kind', 'equalto', 'online')|list|length, 'visita': comments|selectattr('kind', 'equalto', 'visita')|list|length} %}
+<section id="comments" class="panel comments" data-show="{{ show_kind }}">
+  <div class="panel-head"><h2>💬 {{ t('comments') }} <span class="muted">{{ comments|length }}</span></h2></div>
+  <div class="seg ctabs" role="group" aria-label="{{ t('comments') }}">
+    {% for k in ['todos'] + COMMENT_KINDS|list %}
+    <a href="/houses/{{ house.id }}?c={{ k }}#comments" data-show="{{ k }}" {% if show_kind == k %}aria-current="true"{% endif %}>
+      {{ t('comments_all') if k == 'todos' else ('🖥 ' if k == 'online' else '🏠 ') ~ t('kind_' ~ k) }}
+      <span class="tab-n">{{ comments|length if k == 'todos' else counts[k] }}</span></a>
+    {% endfor %}
+  </div>
+  <ol class="comment-list">
+    {% for c in comments %}
+    <li class="comment kind-{{ c.kind }}">
+      <span class="avatar">{{ (c.author or '?')[:1]|upper }}</span>
+      <div class="comment-main">
+        <div class="comment-meta">
+          <strong>{{ c.author or t('deleted_user') }}</strong>
+          <span class="kind-badge {{ c.kind }}">{{ ('🖥 ' if c.kind == 'online' else '🏠 ') ~ t('kind_' ~ c.kind) }}</span>
+          <time class="muted small" datetime="{{ c.created_at|replace(' ', 'T') }}Z">{{ c.created_at[:16] }}</time>
+          {% if c.user_id == me.id or me.is_admin %}
+          <form method="post" action="/comments/{{ c.id }}/delete" onsubmit="return confirm('{{ t('delete_comment_confirm') }}')">
+            <button class="icon-x" title="{{ t('delete') }}" aria-label="{{ t('delete') }}">×</button></form>
+          {% endif %}
+        </div>
+        <p>{{ c.body }}</p>
+      </div>
+    </li>
+    {% endfor %}
+  </ol>
+  <p class="muted small empty-all" {% if comments %}hidden{% endif %}>{{ t('no_comments') }}</p>
+  {% for k in COMMENT_KINDS %}<p class="muted small empty-kind empty-{{ k }}" {% if counts[k] %}hidden{% endif %}>{{ t('no_comments_kind') }}</p>{% endfor %}
+
+  <form class="comment-form" method="post" action="/houses/{{ house.id }}/comments">
+    <div class="kind-toggle" role="radiogroup" aria-label="{{ t('comment_as') }}">
+      {% for k in COMMENT_KINDS %}
+      <input type="radio" id="ck_{{ k }}" name="kind" value="{{ k }}" {% if write_kind == k %}checked{% endif %}>
+      <label for="ck_{{ k }}" class="{{ k }}"><strong>{{ ('🖥 ' if k == 'online' else '🏠 ') ~ t('kind_' ~ k) }}</strong><small>{{ t('kind_' ~ k ~ '_hint') }}</small></label>
+      {% endfor %}
+    </div>
+    <textarea name="body" rows="3" maxlength="2000" required placeholder="{{ t('comment_placeholder') }}" aria-label="{{ t('comment_as') }}"></textarea>
+    <div class="actions"><button class="btn primary">{{ t('comment_send') }}</button></div>
+  </form>
+</section>
+</div>
 
 <form class="danger" method="post" action="/houses/{{ house.id }}/delete" onsubmit="return confirm('{{ t('delete_confirm') }}')">
   <span class="small muted">{{ t('added_on') }} {{ house.created_at[:10] }}</span>

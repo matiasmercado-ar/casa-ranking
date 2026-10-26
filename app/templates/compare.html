@@ -10,10 +10,11 @@
   <thead>
     <tr>
       <th class="sticky">#</th><th class="sticky2"></th>
-      <th>{{ t('score') }}</th><th>{{ t('visitada') }}</th>
+      <th>{{ t('score') }}</th>{% if raters|length > 1 %}{% for u in raters %}<th title="{{ t('people_scores') }}">{{ u.name }}</th>{% endfor %}{% endif %}
+      <th>{{ t('visitada') }}</th>
       {% for tp in TOPICS %}<th>{{ t(tp) }}</th>{% endfor %}
       {% for f in FEATURES %}<th title="{{ t(f) }}">{{ t('short_' ~ f) }}</th>{% endfor %}
-      <th>{{ t('price') }}</th><th>{{ t('status') }}</th>
+      <th>{{ t('price') }}</th><th>{{ t('status') }}</th><th title="{{ t('comments') }}">💬</th>
     </tr>
   </thead>
   <tbody>
@@ -22,11 +23,13 @@
       <td class="sticky">{{ r.rank }}</td>
       <td class="sticky2"><a href="/houses/{{ h.id }}">{{ h.title or t('untitled') }}</a></td>
       <td>{{ score_badge(r.overall) }}</td>
-      <td class="tri {{ 'yes' if h.visitada else 'unk' }}">{{ '✓' if h.visitada else '–' }}</td>
+      {% if raters|length > 1 %}{% for u in raters %}{% set s = r.people.get(u.id) %}<td class="num person-cell">{{ '%.1f'|format(s) if s is not none else '–' }}</td>{% endfor %}{% endif %}
+      <td class="tri visit-{{ r.visit }}" title="{{ t('tab_' ~ r.visit) }}">{{ '✓' if r.visit == 'visitadas' else '📍' if r.visit == 'a_visitar' else '–' }}</td>
       {% for tp in TOPICS %}<td class="num">{{ '%.1f'|format(r.topics[tp]) if r.topics[tp] is not none else '–' }}</td>{% endfor %}
       {% for f in FEATURES %}<td class="tri {{ 'yes' if h[f] == 1 else 'no' if h[f] == 0 else 'unk' }}">{{ '✓' if h[f] == 1 else '✗' if h[f] == 0 else '?' }}</td>{% endfor %}
       <td class="num nowrap">{{ price(h) }}</td>
       <td>{{ t(h.status) }}</td>
+      <td class="num">{{ r.comments or '' }}</td>
     </tr>
   {% endfor %}
   </tbody>

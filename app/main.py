@@ -16,11 +16,11 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import db, linkpreview
-from .db import AMENITIES, FEATURES, HOUSE_QUESTIONS, NEARBY, STATUSES, TOPICS
+from .db import AMENITIES, COMMENT_KINDS, COMMENT_MAX, FEATURES, HOUSE_QUESTIONS, NEARBY, STATUSES, TOPICS
 from .i18n import DEFAULT_LANG, LANGS, translate
-from .scoring import BONUS_STEP, IMPORTANCE, house_scores, ranking, weights
+from .scoring import IMPORTANCE, house_scores, ranking, topic_shares, weights
 
-__version__ = "1.3.1"
+__version__ = "1.4.0"
 BASE = Path(__file__).parent
 CURRENCIES = ("USD", "ARS")
 MIN_PASSWORD = 8
@@ -96,7 +96,7 @@ def render(request: Request, name: str, status_code: int = 200, **ctx) -> HTMLRe
         AMENITIES=AMENITIES,
         NEARBY=NEARBY,
         HOUSE_QUESTIONS=HOUSE_QUESTIONS,
-        BONUS_STEP=BONUS_STEP,
+        COMMENT_KINDS=COMMENT_KINDS,
         IMPORTANCE=IMPORTANCE,
         STATUSES=STATUSES,
         CURRENCIES=CURRENCIES,
@@ -144,26 +144,94 @@ def healthz():
     return {"ok": True, "version": __version__}
 
 
+# Ranking tabs. They split the houses with no overlap: Todas = the other three together.
+TABS = ("todas", "visitadas", "a_visitar", "sin_visitar")
+MIN_CHOICES = (5, 6, 7, 8, 9)
+
+
+def visit_state(h) -> str:
+    return "visitadas" if h["visitada"] else "a_visitar" if h["a_visitar"] else "sin_visitar"
+
+
+def _int(value: str, lo: int, hi: int) -> int | None:
+    value = (value or "").strip()
+    return int(value) if value.isdigit() and lo <= int(value) <= hi else None
+
+
+def _filters(request: Request) -> dict:
+    """Ranking filters from the query string. Unknown or out-of-range values are dropped."""
+    q = request.query_params
+    f = {
+        "min_score": _int(q.get("min_score", ""), 1, 10),
+        "min": {t: v for t in TOPICS if (v := _int(q.get(f"min_{t}", ""), 1, 10)) is not None},
+        "has": [x for x in FEATURES if x in q.getlist("has")],
+        "price_min": _price(q.get("price_min", "")),
+        "price_max": _price(q.get("price_max", "")),
+        "currency": q.get("currency") if q.get("currency") in CURRENCIES else "USD",
+        "pending": q.get("pending") == "1",
+    }
+    f["active"] = sum((f["min_score"] is not None, len(f["min"]), len(f["has"]), f["price_min"] is not None,
+                       f["price_max"] is not None, f["pending"]))
+    return f
+
+
+def _passes(r: dict, f: dict) -> bool:
+    h = r["house"]
+    if f["min_score"] is not None and (r["overall"] is None or r["overall"] < f["min_score"]):
+        return False
+    if any(r["topics"][t] is None or r["topics"][t] < v for t, v in f["min"].items()):
+        return False
+    if any(h[x] != 1 for x in f["has"]):
+        return False
+    if f["price_min"] is not None or f["price_max"] is not None:
+        # Prices are only compared within one currency.
+        if h["price"] is None or h["currency"] != f["currency"]:
+            return False
+        if f["price_min"] is not None and h["price"] < f["price_min"]:
+            return False
+        if f["price_max"] is not None and h["price"] > f["price_max"]:
+            return False
+    return not f["pending"] or r["pending_me"]
+
+
 @app.get("/", response_class=HTMLResponse)
-def index(request: Request, all: int = 0, visitada: str = ""):
-    visitada = visitada if visitada in ("si", "no") else ""
+def index(request: Request, all: int = 0, tab: str = "todas", visitada: str = ""):
+    if visitada in ("si", "no"):  # old links from before the tabs
+        tab = "visitadas" if visitada == "si" else "sin_visitar"
+    tab = tab if tab in TABS else "todas"
+    filters = _filters(request)
     with db.session() as conn:
-        rows = ranking(conn, include_discarded=bool(all), visited=visitada)
-        raters = len(_raters(conn))
+        rows = ranking(conn, include_discarded=bool(all))
+        raters = _raters(conn)
         discarded = conn.execute("SELECT COUNT(*) FROM houses WHERE status = 'descartada'").fetchone()[0]
+        comments = dict(conn.execute("SELECT house_id, COUNT(*) FROM comments GROUP BY house_id").fetchall())
     me = request.state.user
     for r in rows:
         mine = r["ratings"].get(me["id"])
         r["pending_me"] = bool(me["can_rate"]) and (mine is None or any(mine[t] is None for t in TOPICS))
+        r["visit"] = visit_state(r["house"])
+        r["comments"] = comments.get(r["house"]["id"], 0)
+    # Filter after numbering so a house keeps its overall position.
+    rows = [r for r in rows if _passes(r, filters)]
+    counts = {t: sum(1 for r in rows if t == "todas" or r["visit"] == t) for t in TABS}
+    if tab != "todas":
+        rows = [r for r in rows if r["visit"] == tab]
+    # Query string of the current filters, kept when switching tabs.
+    keep = [(k, v) for k, v in request.query_params.multi_items() if k not in ("tab", "all", "visitada") and v != ""]
     return render(request, "index.html", rows=rows, show_all=bool(all), raters=raters, discarded=discarded,
-                  visitada=visitada)
+                  tab=tab, tabs=TABS, counts=counts, filters=filters, keep=keep, MIN_CHOICES=MIN_CHOICES)
 
 
 @app.get("/compare", response_class=HTMLResponse)
 def compare(request: Request):
     with db.session() as conn:
         rows = ranking(conn, include_discarded=False)
-    return render(request, "compare.html", rows=rows)
+        raters = _raters(conn)
+        comments = dict(conn.execute("SELECT house_id, COUNT(*) FROM comments GROUP BY house_id").fetchall())
+    for r in rows:
+        r["visit"] = visit_state(r["house"])
+        r["comments"] = comments.get(r["house"]["id"], 0)
+    return render(request, "compare.html", rows=rows, raters=raters)
 
 
 @app.get("/houses/new", response_class=HTMLResponse)
@@ -245,17 +313,29 @@ def _flash_import(request: Request, url: str, meta: dict) -> None:
 
 
 @app.get("/houses/{house_id}", response_class=HTMLResponse)
-def house_detail(request: Request, house_id: int):
+def house_detail(request: Request, house_id: int, c: str = ""):
     with db.session() as conn:
         h = _house_or_404(conn, house_id)
         raters = _raters(conn)
         rows = conn.execute("SELECT * FROM ratings WHERE house_id = ?", (house_id,)).fetchall()
         w = weights(conn)
         scores = house_scores(h, rows, w)
+        comments = _comments(conn, house_id)
     # The logged-in user's row first: it is the only one they can edit.
     me = request.state.user
     raters = sorted(raters, key=lambda r: r["id"] != me["id"])
-    return render(request, "house_detail.html", house=h, raters=raters, by_rater=scores["ratings"], scores=scores, w=w)
+    return render(request, "house_detail.html", house=h, raters=raters, by_rater=scores["ratings"], scores=scores, w=w,
+                  comments=comments, visit=visit_state(h),
+                  # Comment list filter (all / one kind) and the kind preselected for a new comment:
+                  # the last one used, else "in person" once the house has been visited.
+                  show_kind=c if c in COMMENT_KINDS else "todos",
+                  write_kind=c if c in COMMENT_KINDS else "visita" if h["visitada"] else "online")
+
+
+def _comments(conn, house_id: int):
+    return conn.execute(
+        "SELECT c.*, u.name AS author FROM comments c LEFT JOIN users u ON u.id = c.user_id "
+        "WHERE c.house_id = ? ORDER BY c.created_at, c.id", (house_id,)).fetchall()
 
 
 @app.get("/houses/{house_id}/edit", response_class=HTMLResponse)
@@ -344,19 +424,67 @@ async def save_scores(request: Request, house_id: int):
                 (house_id, me["id"], *[values[t] for t in TOPICS]),
             )
         status = form.get("status")
+        visited = 1 if form.get("visitada") == "1" else 0
+        # Once visited it is no longer "to visit".
         conn.execute(
             f"UPDATE houses SET {', '.join(f'{f} = ?' for f in FEATURES)}, visitada = ?, status = ?, "
-            f"updated_at = datetime('now') WHERE id = ?",
-            (*[_tri(form.get(f)) for f in FEATURES], 1 if form.get("visitada") == "1" else 0,
-             status if status in STATUSES else h["status"], house_id),
+            f"a_visitar = CASE WHEN ? THEN 0 ELSE a_visitar END, updated_at = datetime('now') WHERE id = ?",
+            (*[_tri(form.get(f)) for f in FEATURES], visited,
+             status if status in STATUSES else h["status"], visited, house_id),
         )
         h = _house_or_404(conn, house_id)
         rows = conn.execute("SELECT * FROM ratings WHERE house_id = ?", (house_id,)).fetchall()
         scores = house_scores(h, rows, weights(conn))
     if request.headers.get("accept") == "application/json":
         scores.pop("ratings")
-        return JSONResponse(scores)
+        return JSONResponse({**scores, "visit": visit_state(h)})
     return RedirectResponse(f"/houses/{house_id}", status_code=303)
+
+
+def _back_to(request: Request, fallback: str) -> str:
+    """Same-site page the form came from (keeps the ranking's tab and filters), else fallback."""
+    ref = urlparse(request.headers.get("referer", ""))
+    if ref.netloc == request.url.netloc and ref.path.startswith("/"):
+        return ref.path + (f"?{ref.query}" if ref.query else "")
+    return fallback
+
+
+@app.post("/houses/{house_id}/a-visitar")
+def toggle_to_visit(request: Request, house_id: int, on: str = Form("")):
+    """'Ir a visitar': put a house on (on=1) or off (on=0) the list of houses to go and see."""
+    with db.session() as conn:
+        h = _house_or_404(conn, house_id)
+        value = 1 if on == "1" else 0 if on == "0" else int(not h["a_visitar"])
+        conn.execute("UPDATE houses SET a_visitar = ?, updated_at = datetime('now') WHERE id = ?", (value, house_id))
+        h = _house_or_404(conn, house_id)
+    if request.headers.get("accept") == "application/json":
+        return JSONResponse({"a_visitar": bool(h["a_visitar"]), "visit": visit_state(h)})
+    return RedirectResponse(_back_to(request, f"/houses/{house_id}"), status_code=303)
+
+
+@app.post("/houses/{house_id}/comments")
+def add_comment(request: Request, house_id: int, body: str = Form(""), kind: str = Form("online")):
+    body = body.strip()[:COMMENT_MAX]
+    with db.session() as conn:
+        _house_or_404(conn, house_id)
+        if body:
+            conn.execute("INSERT INTO comments (house_id, user_id, kind, body) VALUES (?, ?, ?, ?)",
+                         (house_id, request.state.user["id"], kind if kind in COMMENT_KINDS else "online", body))
+    return RedirectResponse(f"/houses/{house_id}?c={kind}#comments", status_code=303)
+
+
+@app.post("/comments/{comment_id}/delete")
+def delete_comment(request: Request, comment_id: int):
+    """Authors delete their own comments; the admin can delete any."""
+    me = request.state.user
+    with db.session() as conn:
+        c = conn.execute("SELECT * FROM comments WHERE id = ?", (comment_id,)).fetchone()
+        if not c:
+            raise HTTPException(404)
+        if c["user_id"] != me["id"] and not me["is_admin"]:
+            raise HTTPException(403)
+        conn.execute("DELETE FROM comments WHERE id = ?", (comment_id,))
+    return RedirectResponse(f"/houses/{c['house_id']}?c={c['kind']}#comments", status_code=303)
 
 
 # --- settings --------------------------------------------------------------
@@ -367,7 +495,7 @@ def settings(request: Request, msg: str = "", err: str = ""):
     with db.session() as conn:
         users = _users(conn)
         w = weights(conn)
-    return render(request, "settings.html", users=users, weights=w, msg=msg, err=err)
+    return render(request, "settings.html", users=users, weights=w, shares=topic_shares(w), msg=msg, err=err)
 
 
 def _back(msg: str = "", err: str = "", anchor: str = "") -> RedirectResponse:
@@ -401,6 +529,9 @@ async def save_weights(request: Request):
         for f in FEATURES:
             value = str(form.get(f"importance_{f}", "1"))
             db.set_setting(conn, f"importance_{f}", value if value in ("0", "1", "2") else "1")
+        share = _int(str(form.get("questions_share", "")), 0, 50)
+        if share is not None:
+            db.set_setting(conn, "questions_share", str(share))
     return _back(msg="saved", anchor="#weights")
 
 
@@ -483,21 +614,28 @@ def set_lang(request: Request, code: str, next: str = "/"):
 
 def _export_rows(conn) -> list[dict]:
     names = {u["id"]: u["name"] for u in _users(conn)}
+    comments: dict[int, list] = {}
+    for c in conn.execute("SELECT * FROM comments ORDER BY created_at, id"):
+        comments.setdefault(c["house_id"], []).append(
+            {"author": names.get(c["user_id"]), "kind": c["kind"], "text": c["body"], "at": c["created_at"]})
     out = []
     for row in ranking(conn, include_discarded=True):
         h = row["house"]
         item = {"rank": row["rank"], "id": h["id"], "title": h["title"], "url": h["url"], "address": h["address"],
                 "price": h["price"], "currency": h["currency"], "status": h["status"],
-                "visitada": bool(h["visitada"]),
+                "visitada": bool(h["visitada"]), "a_visitar": bool(h["a_visitar"]),
                 "score": round(row["overall"], 2) if row["overall"] is not None else None,
                 "stars_score": round(row["base"], 2) if row["base"] is not None else None,
-                "questions_bonus": row["bonus"]}
+                "questions_score": round(row["questions"], 2) if row["questions"] is not None else None}
         item.update({f"avg_{t}": round(v, 2) if v is not None else None for t, v in row["topics"].items()})
         item.update({f: {1: True, 0: False}.get(h[f]) for f in FEATURES})
         item["notes"] = h["notes"]
         for uid, r in row["ratings"].items():
             for t in TOPICS:
                 item[f"{names.get(uid, uid)}_{t}"] = r[t]
+        for uid, score in row["people"].items():
+            item[f"{names.get(uid, uid)}_score"] = round(score, 2)
+        item["comments"] = comments.get(h["id"], [])
         out.append(item)
     return out
 
@@ -515,6 +653,8 @@ def export_csv():
     with db.session() as conn:
         data = _export_rows(conn)
     buf = io.StringIO()
+    for row in data:  # one cell per house: "Author (kind): text" lines
+        row["comments"] = "\n".join(f"{c['author'] or '?'} ({c['kind']}): {c['text']}" for c in row["comments"])
     fields = list(dict.fromkeys(k for row in data for k in row))
     writer = csv.DictWriter(buf, fieldnames=fields)
     writer.writeheader()

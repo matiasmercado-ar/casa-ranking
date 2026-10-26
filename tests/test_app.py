@@ -120,7 +120,10 @@ def test_rating_and_ranking_order(users):
     ana.post(f"/houses/{a}/scores", data={"r2_ubicacion": "4", "status": "activa"})
     s = ana.post(f"/houses/{b}/scores", data={"r2_ubicacion": "9", "r2_vecindario": "7", "supermercado": "1",
                                                "plaza": "0", "status": "favorita"}, headers=JSON).json()
-    assert s["overall"] == 8  # unrated topics are ignored, not counted as zero
+    # Unrated topics count as a neutral 5: (9*2 + 7 + 5 + 5) / 5 = 7 stars.
+    assert s["base"] == 7
+    # 1 Yes, 1 No, 9 unknown = 5.5 of 11 -> 5.0; 85% stars + 15% questions.
+    assert s["questions"] == 5 and round(s["overall"], 2) == 6.7
     assert s["amenities_yes"] == 1
     page = ana.get("/").text
     assert page.index("Casa B") < page.index("Casa A")
@@ -131,7 +134,7 @@ def test_rating_and_ranking_order(users):
 def test_zero_is_a_score_and_empty_clears(users):
     ana, _ = users
     h = add_house(ana)
-    assert ana.post(f"/houses/{h}/scores", data={"r2_ubicacion": "0"}, headers=JSON).json()["overall"] == 0
+    assert ana.post(f"/houses/{h}/scores", data={"r2_ubicacion": "0"}, headers=JSON).json()["base"] == 3  # (0 + 15) / 5
     assert ana.post(f"/houses/{h}/scores", data={"r2_ubicacion": ""}, headers=JSON).json()["overall"] is None
     assert ana.post(f"/houses/{h}/scores", data={"r2_ubicacion": "11"}, headers=JSON).json()["overall"] is None
 
@@ -141,7 +144,7 @@ def test_weights_change_overall(admin, users):
     h = add_house(ana)
     admin.post("/settings/weights", data={"ubicacion": "3", "vecindario": "1", "construccion": "1", "antiguedad": "1"})
     s = ana.post(f"/houses/{h}/scores", data={"r2_ubicacion": "10", "r2_construccion": "0"}, headers=JSON).json()
-    assert s["overall"] == 7.5
+    assert round(s["base"], 2) == 6.67  # (10*3 + 0 + 5 + 5) / 6
 
 
 def test_visited_flag_and_filter(users):
@@ -183,40 +186,102 @@ def test_exports(users):
     assert "Ana_vecindario" in ana.get("/export.csv").text
 
 
-def test_questions_adjust_score(admin, users):
+
+
+
+def stars(uid, **topics):
+    """Form fields for one user's stars, e.g. stars(2, ubicacion=8)."""
+    return {f"r{uid}_{t}": str(v) for t, v in topics.items()}
+
+
+def test_questions_are_a_share_of_the_score(admin, users):
     ana, _ = users
     h = add_house(ana)
-    base = {"r2_ubicacion": "6"}
+    base = stars(2, ubicacion=6, vecindario=6, construccion=6, antiguedad=6)
+    # Everything unknown = half credit.
     s = ana.post(f"/houses/{h}/scores", data=base, headers=JSON).json()
-    assert s["overall"] == 6 and s["bonus"] == 0
-    # Normal importance: each Yes +0.3, each No -0.3, unknown 0.
-    s = ana.post(f"/houses/{h}/scores", data={**base, "pileta": "1", "pet_friendly": "1", "colegio": "0", "plaza": ""},
-                 headers=JSON).json()
-    assert s["bonus"] == 0.3 and round(s["overall"], 2) == 6.3
-    # Very important = double, not important = nothing.
+    assert s["base"] == 6 and s["questions"] == 5 and round(s["overall"], 2) == 5.85
+    yes = {f: "1" for f in db.FEATURES}
+    no = {f: "0" for f in db.FEATURES}
+    assert round(ana.post(f"/houses/{h}/scores", data={**base, **yes}, headers=JSON).json()["overall"], 2) == 6.6
+    assert round(ana.post(f"/houses/{h}/scores", data={**base, **no}, headers=JSON).json()["overall"], 2) == 5.1
+    # Very important = double weight within the questions, 0 = ignored.
     admin.post("/settings/weights", data={"importance_pileta": "2", "importance_colegio": "0"})
-    s = ana.post(f"/houses/{h}/scores", data={**base, "pileta": "1", "pet_friendly": "1", "colegio": "0"},
-                 headers=JSON).json()
-    assert s["bonus"] == 0.9 and s["base"] == 6
+    s = ana.post(f"/houses/{h}/scores", data={**base, **no, "pileta": "1"}, headers=JSON).json()
+    assert round(s["questions"], 2) == round(10 * 2 / 11, 2)  # pileta 2 of total 2 + colegio 0 + 9 others x 1
+    # The admin can change how much the questions are worth.
+    admin.post("/settings/weights", data={"questions_share": "0"})
+    assert ana.post(f"/houses/{h}/scores", data={**base, **yes}, headers=JSON).json()["overall"] == 6
 
 
-def test_questions_need_stars_and_score_is_clamped(users):
+def test_questions_need_stars(users):
     ana, _ = users
     h = add_house(ana)
     yes = {f: "1" for f in db.FEATURES}
     assert ana.post(f"/houses/{h}/scores", data=yes, headers=JSON).json()["overall"] is None
-    s = ana.post(f"/houses/{h}/scores", data={**yes, "r2_ubicacion": "10"}, headers=JSON).json()
-    assert s["overall"] == 10 and s["raw"] > 10
 
 
-def test_ties_at_ten_sorted_by_raw_score(users):
+def test_only_a_perfect_house_gets_ten(users):
+    ana, beto = users
+    h = add_house(ana)
+    yes = {f: "1" for f in db.FEATURES}
+    ana.post(f"/houses/{h}/scores", data={**stars(2, **dict.fromkeys(db.TOPICS, 10)), **yes})
+    s = beto.post(f"/houses/{h}/scores", data={**stars(3, **dict.fromkeys(db.TOPICS, 10)), **yes}, headers=JSON).json()
+    assert s["overall"] == 10
+    # One "No sé", one 9-star topic from one person, or one person not having rated: no longer perfect.
+    s = beto.post(f"/houses/{h}/scores", data={**stars(3, **dict.fromkeys(db.TOPICS, 10)), **yes, "gimnasio": ""},
+                  headers=JSON).json()
+    assert 9.9 < s["overall"] < 10
+    s = beto.post(f"/houses/{h}/scores", data={**stars(3, **{**dict.fromkeys(db.TOPICS, 10), "antiguedad": 9}), **yes},
+                  headers=JSON).json()
+    assert 9.8 < s["overall"] < 10
+    s = beto.post(f"/houses/{h}/scores", data={**stars(3, ubicacion=10), **yes}, headers=JSON).json()
+    assert s["overall"] < 9  # Beto's missing topics count as 5
+
+
+def test_typical_good_house_is_not_ten(users):
+    """The v1.3 bug: 8-9 stars and mostly Yes answers used to hit the 10.0 cap."""
     ana, _ = users
-    a = add_house(ana, title="Diez pelada")
-    b = add_house(ana, title="Diez con pileta")
-    ana.post(f"/houses/{a}/scores", data={"r2_ubicacion": "10"})
-    ana.post(f"/houses/{b}/scores", data={"r2_ubicacion": "10", "pileta": "1"})
+    h = add_house(ana)
+    yes = {f: "1" for f in db.FEATURES}
+    s = ana.post(f"/houses/{h}/scores", data={**stars(2, ubicacion=9, vecindario=9, construccion=8, antiguedad=9),
+                                               **yes, "pileta": ""}, headers=JSON).json()
+    assert 8.5 < s["overall"] < 9.5
+
+
+def test_location_weighs_double_by_default(users):
+    ana, _ = users
+    a = add_house(ana, title="Buena ubicacion")
+    b = add_house(ana, title="Buena construccion")
+    sa = ana.post(f"/houses/{a}/scores", data=stars(2, ubicacion=10, vecindario=5, construccion=5, antiguedad=5),
+                  headers=JSON).json()
+    sb = ana.post(f"/houses/{b}/scores", data=stars(2, ubicacion=5, vecindario=5, construccion=10, antiguedad=5),
+                  headers=JSON).json()
+    assert sa["base"] == 7 and sb["base"] == 6
+
+
+def test_both_opinions_count(users):
+    ana, beto = users
+    loved = add_house(ana, title="Le encanta a Ana")
+    shared = add_house(ana, title="Les gusta a los dos")
+    ana.post(f"/houses/{loved}/scores", data=stars(2, **dict.fromkeys(db.TOPICS, 10)))
+    s = beto.post(f"/houses/{loved}/scores", data=stars(3, **dict.fromkeys(db.TOPICS, 5)), headers=JSON).json()
+    # Average 7.5, lowest 5 -> 6.25: the one who isn't convinced pulls it down.
+    assert s["people"] == {"2": 10, "3": 5} and s["base"] == 6.25
+    ana.post(f"/houses/{shared}/scores", data=stars(2, **dict.fromkeys(db.TOPICS, 8)))
+    beto.post(f"/houses/{shared}/scores", data=stars(3, **dict.fromkeys(db.TOPICS, 7)))
     page = ana.get("/").text
-    assert page.index("Diez con pileta") < page.index("Diez pelada")
+    assert page.index("Les gusta a los dos") < page.index("Le encanta a Ana")
+    # Each person's own score is shown on the card.
+    assert 'data-uid="2"' in page and 'data-uid="3"' in page
+
+
+def test_missing_opinion_is_shown(users):
+    ana, _ = users
+    h = add_house(ana, title="Solo Ana")
+    ana.post(f"/houses/{h}/scores", data=stars(2, ubicacion=8))
+    page = ana.get("/").text
+    assert "Falta Beto" in page
 
 
 def test_new_questions_and_unknown_option(users):
@@ -269,7 +334,8 @@ def test_migration_from_v1_keeps_data(env, monkeypatch):
         h = c.execute("SELECT * FROM houses WHERE id = 2").fetchone()
         assert h["visitada"] == 1 and h["status"] == "activa" and h["supermercado"] == 1
         assert h["currency"] == "USD" and h["pileta"] is None
-        assert c.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert c.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert h["a_visitar"] == 0
         assert c.execute("SELECT COUNT(*) FROM ratings").fetchone()[0] == 2
         assert db.get_setting(c, "weight_ubicacion") == "2"
     page = matias.get("/houses/2").text
@@ -374,3 +440,213 @@ def test_refresh_updates_and_reports_price_change(main, users, monkeypatch):
 
 def test_static_assets_are_versioned(admin):
     assert re.search(r'/static/style\.css\?v=[\d.]+', admin.get("/").text)
+
+
+# --- tabs and "ir a visitar" ------------------------------------------------------
+
+
+def _titles(page):
+    return re.findall(r'<h2>([^<]+)</h2>', page.split('<ol class="cards">', 1)[1]) if '<ol class="cards">' in page else []
+
+
+def test_to_visit_button_and_tabs(users):
+    ana, beto = users
+    fuimos = add_house(ana, title="Fuimos")
+    plan = add_house(ana, title="Vamos el sabado")
+    add_house(ana, title="Solo online")
+    ana.post(f"/houses/{fuimos}/scores", data={"visitada": "1"})
+    r = beto.post(f"/houses/{plan}/a-visitar", data={"on": "1"}, headers=JSON)
+    assert r.json() == {"a_visitar": True, "visit": "a_visitar"}
+    # The tabs split the houses with no overlap.
+    assert _titles(ana.get("/?tab=visitadas").text) == ["Fuimos"]
+    assert _titles(ana.get("/?tab=a_visitar").text) == ["Vamos el sabado"]
+    assert _titles(ana.get("/?tab=sin_visitar").text) == ["Solo online"]
+    page = ana.get("/").text
+    assert len(_titles(page)) == 3
+    for tab, n in (("todas", 3), ("visitadas", 1), ("a_visitar", 1), ("sin_visitar", 1)):
+        assert re.search(rf'class="tab tab-{tab}"[^>]*>\s*[^<]+<span class="tab-n">{n}</span>', page), tab
+    # Every unvisited card has the button; it shows its state.
+    assert page.count('class="to-visit-form"') == 2 and 'aria-pressed="true"' in page
+    # Without JS: a plain POST toggles and goes back to the page it came from.
+    r = ana.post(f"/houses/{plan}/a-visitar", headers={"referer": "http://testserver/?tab=a_visitar"},
+                 follow_redirects=False)
+    assert r.headers["location"] == "/?tab=a_visitar"
+    assert _titles(ana.get("/?tab=a_visitar").text) == []
+
+
+def test_visiting_clears_to_visit(users):
+    ana, _ = users
+    h = add_house(ana)
+    ana.post(f"/houses/{h}/a-visitar", data={"on": "1"})
+    s = ana.post(f"/houses/{h}/scores", data={"visitada": "1"}, headers=JSON).json()
+    assert s["visit"] == "visitadas"
+    with db.session() as c:
+        assert c.execute("SELECT a_visitar FROM houses WHERE id = ?", (h,)).fetchone()[0] == 0
+    # A visited house has no "Ir a visitar" button any more.
+    assert 'class="to-visit-form"' not in ana.get(f"/houses/{h}").text
+
+
+def test_old_visited_links_still_work(users):
+    ana, _ = users
+    v = add_house(ana, title="Fuimos")
+    add_house(ana, title="Online")
+    ana.post(f"/houses/{v}/scores", data={"visitada": "1"})
+    assert _titles(ana.get("/?visitada=si").text) == ["Fuimos"]
+    assert _titles(ana.get("/?visitada=no").text) == ["Online"]
+
+
+def test_to_visit_unknown_house_404(users):
+    ana, _ = users
+    assert ana.post("/houses/999/a-visitar").status_code == 404
+
+
+# --- filters ---------------------------------------------------------------------
+
+
+def _filter_houses(ana, beto):
+    a = add_house(ana, title="Cara y buena", price="120000")
+    b = add_house(ana, title="Barata con pileta", price="60000")
+    c = add_house(ana, title="En pesos", price="90000", currency="ARS")
+    add_house(ana, title="Sin puntuar")
+    ana.post(f"/houses/{a}/scores", data=stars(2, ubicacion=9, vecindario=9, construccion=9, antiguedad=9))
+    ana.post(f"/houses/{b}/scores", data={**stars(2, ubicacion=6, vecindario=7, construccion=5, antiguedad=5),
+                                           "pileta": "1", "colegio": "1"})
+    ana.post(f"/houses/{c}/scores", data=stars(2, ubicacion=7, vecindario=7, construccion=7, antiguedad=7))
+    return a, b, c
+
+
+def test_filter_by_score_and_stars(users):
+    ana, beto = users
+    _filter_houses(ana, beto)
+    assert _titles(ana.get("/?min_score=8").text) == ["Cara y buena"]
+    assert _titles(ana.get("/?min_vecindario=7").text) == ["Cara y buena", "En pesos", "Barata con pileta"]
+    assert _titles(ana.get("/?min_ubicacion=7&min_construccion=7").text) == ["Cara y buena", "En pesos"]
+    page = ana.get("/?min_score=8").text
+    assert "Filtros (1)" in page and "Limpiar filtros" in page
+    # A filtered house keeps its overall rank number.
+    page = ana.get("/?min_ubicacion=7&min_construccion=7").text
+    assert re.search(r'rank-(\d+)" data-visit[^>]*>(?:(?!</li>).)*En pesos', page, re.S).group(1) == "2"
+
+
+def test_filter_by_features_and_price(users):
+    ana, beto = users
+    _filter_houses(ana, beto)
+    assert _titles(ana.get("/?has=pileta&has=colegio").text) == ["Barata con pileta"]
+    assert _titles(ana.get("/?has=pileta&has=gimnasio").text) == []
+    assert "Ninguna casa cumple" in ana.get("/?has=pileta&has=gimnasio").text
+    assert _titles(ana.get("/?price_max=100.000").text) == ["Barata con pileta"]
+    assert _titles(ana.get("/?price_min=100000").text) == ["Cara y buena"]
+    assert _titles(ana.get("/?price_max=100000&currency=ARS").text) == ["En pesos"]
+    # Bad values are ignored, not errors.
+    assert len(_titles(ana.get("/?min_score=abc&min_ubicacion=99&has=nope&currency=EUR").text)) == 4
+
+
+def test_filters_combine_with_tabs_and_pending(users):
+    ana, beto = users
+    a, b, _ = _filter_houses(ana, beto)
+    ana.post(f"/houses/{b}/a-visitar", data={"on": "1"})
+    assert _titles(ana.get("/?tab=a_visitar&has=pileta").text) == ["Barata con pileta"]
+    assert _titles(ana.get("/?tab=a_visitar&min_score=8").text) == []
+    page = ana.get("/?min_score=8").text
+    # Tab links keep the filters; counts follow them.
+    assert 'href="/?min_score=8&amp;tab=visitadas"' in page
+    assert re.search(r'class="tab tab-todas"[^>]*>\s*[^<]+<span class="tab-n">1</span>', page)
+    beto.post(f"/houses/{a}/scores", data=stars(3, **dict.fromkeys(db.TOPICS, 8)))
+    assert _titles(beto.get("/?pending=1").text) == ["En pesos", "Barata con pileta", "Sin puntuar"]
+
+
+# --- comments --------------------------------------------------------------------
+
+
+def test_comments_have_author_and_kind(users):
+    ana, beto = users
+    h = add_house(ana)
+    ana.post(f"/houses/{h}/comments", data={"body": "Las fotos muestran humedad", "kind": "online"})
+    r = beto.post(f"/houses/{h}/comments", data={"body": "Fuimos: la humedad es real\nel patio es enorme",
+                                                  "kind": "visita"}, follow_redirects=False)
+    assert r.headers["location"] == f"/houses/{h}?c=visita#comments"
+    ana.post(f"/houses/{h}/comments", data={"body": "   ", "kind": "online"})  # empty: ignored
+    page = ana.get(f"/houses/{h}").text
+    assert page.count('<li class="comment kind-') == 2
+    assert re.search(r'kind-online">.*?<strong>Ana</strong>.*?Las fotos muestran humedad', page, re.S)
+    assert re.search(r'kind-visita">.*?<strong>Beto</strong>.*?el patio es enorme', page, re.S)
+    # Counts per kind, and the list can open on one kind.
+    assert re.search(r'data-show="visita"[^>]*>\s*[^<]*<span class="tab-n">1</span>', page)
+    assert 'class="panel comments" data-show="visita"' in ana.get(f"/houses/{h}?c=visita").text
+    # Comment count on the ranking card.
+    assert f'href="/houses/{h}#comments"' in ana.get("/").text
+
+
+def test_comment_kind_defaults(users):
+    ana, _ = users
+    h = add_house(ana)
+    assert 'id="ck_online" name="kind" value="online" checked' in ana.get(f"/houses/{h}").text
+    ana.post(f"/houses/{h}/scores", data={"visitada": "1"})
+    assert 'id="ck_visita" name="kind" value="visita" checked' in ana.get(f"/houses/{h}").text
+    ana.post(f"/houses/{h}/comments", data={"body": "x", "kind": "hack"})
+    with db.session() as c:
+        assert c.execute("SELECT kind FROM comments").fetchone()[0] == "online"
+
+
+def test_comment_html_is_escaped(users):
+    ana, _ = users
+    h = add_house(ana)
+    ana.post(f"/houses/{h}/comments", data={"body": "<script>alert(1)</script>"})
+    page = ana.get(f"/houses/{h}").text
+    assert "<script>alert(1)" not in page and "&lt;script&gt;" in page
+
+
+def test_only_author_or_admin_deletes_comments(admin, users):
+    ana, beto = users
+    h = add_house(ana)
+    ana.post(f"/houses/{h}/comments", data={"body": "de Ana"})
+    ana.post(f"/houses/{h}/comments", data={"body": "otro de Ana"})
+    with db.session() as c:
+        first, second = [r[0] for r in c.execute("SELECT id FROM comments ORDER BY id")]
+    assert beto.post(f"/comments/{first}/delete").status_code == 403
+    assert 'action="/comments/' not in beto.get(f"/houses/{h}").text  # no delete button on others' comments
+    ana.post(f"/comments/{first}/delete")
+    admin.post(f"/comments/{second}/delete")
+    with db.session() as c:
+        assert c.execute("SELECT COUNT(*) FROM comments").fetchone()[0] == 0
+    assert ana.post("/comments/999/delete").status_code == 404
+
+
+def test_comments_survive_user_deletion_and_go_with_house(admin, users):
+    ana, beto = users
+    h = add_house(ana)
+    beto.post(f"/houses/{h}/comments", data={"body": "comentario de Beto"})
+    admin.post("/admin/users/3/delete")
+    page = ana.get(f"/houses/{h}").text
+    assert "comentario de Beto" in page and "Usuario borrado" in page
+    ana.post(f"/houses/{h}/delete")
+    with db.session() as c:
+        assert c.execute("SELECT COUNT(*) FROM comments").fetchone()[0] == 0
+
+
+def test_export_includes_comments_and_people(users):
+    ana, beto = users
+    h = add_house(ana, title="Exportada")
+    ana.post(f"/houses/{h}/scores", data=stars(2, ubicacion=8))
+    beto.post(f"/houses/{h}/comments", data={"body": "linda", "kind": "visita"})
+    ana.post(f"/houses/{h}/a-visitar", data={"on": "1"})
+    row = ana.get("/export.json").json()[0]
+    assert row["comments"][0]["author"] == "Beto" and row["comments"][0]["kind"] == "visita"
+    assert row["Ana_score"] == 6.2 and row["a_visitar"] is True and "questions_score" in row
+    assert "Beto (visita): linda" in ana.get("/export.csv").text
+
+
+def test_compare_shows_people_and_visit_state(users):
+    ana, beto = users
+    h = add_house(ana)
+    ana.post(f"/houses/{h}/scores", data=stars(2, ubicacion=8))
+    ana.post(f"/houses/{h}/a-visitar", data={"on": "1"})
+    page = ana.get("/compare").text
+    assert "<th title=\"Opinión de cada uno\">Ana</th>" in page and "visit-a_visitar" in page
+
+
+def test_settings_show_topic_shares_and_questions_share(admin):
+    page = admin.get("/settings").text
+    assert "40%" in page and 'name="questions_share"' in page and 'value="15"' in page
+    admin.post("/settings/weights", data={"questions_share": "99"})  # out of range: kept
+    assert 'name="questions_share" min="0" max="50" step="1" value="15"' in admin.get("/settings").text

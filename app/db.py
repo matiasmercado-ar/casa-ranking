@@ -14,6 +14,9 @@ HOUSE_QUESTIONS = ("mejorable", "pet_friendly", "pileta", "pelopincho")
 FEATURES = HOUSE_QUESTIONS + NEARBY
 AMENITIES = NEARBY  # counted in the "Cerca x/7" summary
 STATUSES = ("activa", "favorita", "descartada")
+# Where a comment was made from: looking at the listing online, or after seeing the house in person.
+COMMENT_KINDS = ("online", "visita")
+COMMENT_MAX = 2000
 
 # Version 1 as first released; later versions are migrations on top of it so
 # fresh installs and upgraded ones always end up with the same schema.
@@ -81,6 +84,20 @@ ALTER TABLE houses ADD COLUMN lat REAL;
 ALTER TABLE houses ADD COLUMN lng REAL;
 """
 
+# v5: "ir a visitar" (planned visit) flag and per-house comments with their author.
+MIGRATION_V5 = """
+ALTER TABLE houses ADD COLUMN a_visitar INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    house_id INTEGER NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+    user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    kind TEXT NOT NULL DEFAULT 'online' CHECK (kind IN ('online', 'visita')),
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX comments_house ON comments (house_id, created_at);
+"""
+
 
 def db_path() -> Path:
     return Path(os.environ.get("DATA_DIR", "./data")) / "casa-ranking.db"
@@ -137,6 +154,9 @@ def init() -> str | None:
         if version == 3:
             conn.executescript(MIGRATION_V4)
             version = 4
+        if version == 4:
+            conn.executescript(MIGRATION_V5)
+            version = 5
         conn.execute(f"PRAGMA user_version = {version}")
         return ensure_admin(conn)
 

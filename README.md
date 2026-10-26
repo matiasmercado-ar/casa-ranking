@@ -16,14 +16,22 @@ together, but any number of people can rate.
 - **Per-person star ratings (0-10)** for *Ubicación* (location), *Vecindario*
   (neighbourhood), *Construcción* (construction) and *Antigüedad* (age). Each person can
   only change their own stars (enforced server side); everyone else's are shown
-  read-only. The ranking uses the average, and unrated topics are ignored rather than
-  counted as zero. A "Te falta puntuar" tag shows which houses you still have to rate.
-- **Visited or not**: a green "Visitada" or red "No visitada" banner on every card,
-  with a filter for each.
-- **Yes / No / "No sé" questions** that nudge the score: about the house (*¿Mejorable?*,
+  read-only, and every card shows each person's own score. A "Te falta puntuar" tag
+  shows which houses you still have to rate.
+- **A score that means something** (0-10): each person's stars as a weighted average
+  (*Ubicación* counts double by default, an unrated topic counts as 5), then everyone's
+  opinions together, halfway between the average and the lowest one, so a house only
+  ranks high when all of you like it. The Yes/No questions are 15% of the score. Only 10
+  stars on everything from everyone plus Yes to every question gives 10.0.
+- **Visited, to visit, not visited**: tabs *Todas / Visitadas / Ir a visitar / Sin
+  visitar*, an "Ir a visitar" button on every house, and a green / blue / red banner.
+- **Filters**: minimum score, minimum stars per topic, must-have features, price range.
+- **Comments** on every house with their author, marked *Online* (looking at the
+  listing) or *En persona* (after a visit), with a tab for each.
+- **Yes / No / "No sé" questions** that count towards the score: about the house (*¿Mejorable?*,
   pet friendly, pool or room for one, room for an above-ground pool) and what's nearby
   (supermarket, school, public transport, gym, bike lane, park, hospital/clinic).
-- **Weighted score**: give each topic a weight and each question an importance in Settings.
+- **Tunable**: topic weights, question importance and how much the questions count, in Settings.
 - **Statuses**: active, favourite, discarded (discarded ones are hidden from the ranking).
 - **Paste a link, get the house**: photo, price, currency, address, map coordinates and
   key facts (bedrooms, bathrooms, m², age) are read from the listing for **Inmoup,

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import score_badge, bar, chip, price %}
+{% from "_macros.html" import score_badge, bar, chip, price, people_scores, ribbon, to_visit_button %}
 {% block content %}
 <section class="hero">
   <div>
@@ -14,57 +14,113 @@
 </form>
 <p class="quickadd-alt small"><a href="/houses/new#manual">{{ t('or_manual') }}</a></p>
 
-<div class="list-head">
-  <div class="filters" role="group">
-    {% set keep = '&all=1' if show_all else '' %}
-    <a class="fchip {% if not visitada %}on{% endif %}" href="/?{{ keep }}">{{ t('filter_all') }}</a>
-    <a class="fchip {% if visitada == 'si' %}on{% endif %}" href="/?visitada=si{{ keep }}">✓ {{ t('filter_visited') }}</a>
-    <a class="fchip {% if visitada == 'no' %}on{% endif %}" href="/?visitada=no{{ keep }}">{{ t('filter_not_visited') }}</a>
-  </div>
-  <div class="list-meta">
-    <span class="muted">{{ t('houses_count', n=rows|length) }}</span>
-    {% if discarded %}
-      {% set vq = '&visitada=' ~ visitada if visitada else '' %}
-      {% if show_all %}<a href="/?{{ vq }}">{{ t('hide_discarded') }}</a>{% else %}<a href="/?all=1{{ vq }}">{{ t('show_discarded') }} ({{ discarded }})</a>{% endif %}
-    {% endif %}
-  </div>
-</div>
+<nav class="tabs" aria-label="{{ t('nav_ranking') }}">
+  {% set aq = [('all', 1)] if show_all else [] %}{% set tq = [('tab', tab)] if tab != 'todas' else [] %}
+  {% for tb in tabs %}{% set q = (keep + aq + ([('tab', tb)] if tb != 'todas' else []))|urlencode %}
+  <a class="tab tab-{{ tb }}" href="/{{ '?' ~ q if q }}" {% if tab == tb %}aria-current="page"{% endif %}>
+    {{ t('tab_' ~ tb) }} <span class="tab-n">{{ counts[tb] }}</span></a>
+  {% endfor %}
+</nav>
+
+<details class="filters-panel" {% if filters.active %}open{% endif %}>
+  <summary>
+    <span class="btn small">⚲ {{ t('filters_n', n=filters.active) if filters.active else t('filters') }}</span>
+    <span class="list-meta">
+      <span class="muted">{{ t('houses_count', n=rows|length) }}</span>
+      {% if discarded %}
+        {% if show_all %}<a href="/?{{ (keep + tq)|urlencode }}">{{ t('hide_discarded') }}</a>
+        {% else %}<a href="/?{{ (keep + tq + [('all', 1)])|urlencode }}">{{ t('show_discarded') }} ({{ discarded }})</a>{% endif %}
+      {% endif %}
+    </span>
+  </summary>
+  <form class="filter-form" method="get" action="/">
+    {% if tab != 'todas' %}<input type="hidden" name="tab" value="{{ tab }}">{% endif %}
+    {% if show_all %}<input type="hidden" name="all" value="1">{% endif %}
+    <div class="filter-grid">
+      <fieldset>
+        <legend>{{ t('min_score') }}</legend>
+        <select name="min_score" aria-label="{{ t('min_score') }}">
+          <option value="">{{ t('any') }}</option>
+          {% for v in MIN_CHOICES %}<option value="{{ v }}" {% if filters.min_score == v %}selected{% endif %}>≥ {{ v }}</option>{% endfor %}
+        </select>
+        <span class="sub">{{ t('price_from') }} / {{ t('price_to') }}</span>
+        <div class="price-range">
+          <input type="text" inputmode="numeric" name="price_min" aria-label="{{ t('price_from') }}" placeholder="{{ t('price_from') }}"
+                 value="{{ '%.0f'|format(filters.price_min) if filters.price_min is not none else '' }}">
+          <input type="text" inputmode="numeric" name="price_max" aria-label="{{ t('price_to') }}" placeholder="{{ t('price_to') }}"
+                 value="{{ '%.0f'|format(filters.price_max) if filters.price_max is not none else '' }}">
+          <select name="currency" aria-label="{{ t('currency') }}">{% for c in CURRENCIES %}<option {% if filters.currency == c %}selected{% endif %}>{{ c }}</option>{% endfor %}</select>
+        </div>
+        {% if me.can_rate %}<label class="check"><input type="checkbox" name="pending" value="1" {% if filters.pending %}checked{% endif %}> {{ t('only_pending') }}</label>{% endif %}
+      </fieldset>
+      <fieldset>
+        <legend>{{ t('min_stars') }}</legend>
+        {% for tp in TOPICS %}
+        <label class="min-row"><span>{{ t(tp) }}</span>
+          <select name="min_{{ tp }}">
+            <option value="">{{ t('any') }}</option>
+            {% for v in MIN_CHOICES %}<option value="{{ v }}" {% if filters.min[tp] == v %}selected{% endif %}>★ ≥ {{ v }}</option>{% endfor %}
+          </select>
+        </label>
+        {% endfor %}
+      </fieldset>
+      <fieldset class="has">
+        <legend>{{ t('must_have') }}</legend>
+        <div class="has-chips">
+        {% for f in FEATURES %}
+          <label class="has-chip"><input type="checkbox" name="has" value="{{ f }}" {% if f in filters.has %}checked{% endif %}><span>{{ t('short_' ~ f) }}</span></label>
+        {% endfor %}
+        </div>
+      </fieldset>
+    </div>
+    <div class="actions">
+      <button class="btn primary">{{ t('apply') }}</button>
+      {% if filters.active %}<a class="btn ghost" href="/?{{ (tq + aq)|urlencode }}">{{ t('clear_filters') }}</a>{% endif %}
+    </div>
+  </form>
+</details>
 
 {% if not rows %}
   <div class="empty">
     <div class="empty-icon">🏡</div>
-    <h2>{{ t('empty_title') }}</h2>
-    <p class="muted">{{ t('empty_body') }}</p>
+    {% if filters.active or tab != 'todas' %}<p class="muted">{{ t('no_match') }}</p>
+    {% else %}<h2>{{ t('empty_title') }}</h2><p class="muted">{{ t('empty_body') }}</p>{% endif %}
   </div>
 {% else %}
   <ol class="cards">
   {% for r in rows %}{% set h = r.house %}
-    <li class="card status-{{ h.status }} rank-{{ r.rank }}">
+    <li class="card status-{{ h.status }} rank-{{ r.rank }}" data-visit="{{ r.visit }}">
       <a class="card-link" href="/houses/{{ h.id }}" aria-label="{{ h.title or t('untitled') }}"></a>
       <div class="rank">#{{ r.rank }}</div>
       <div class="thumb">
         {% if h.image_url %}<img src="{{ h.image_url }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% else %}<span>🏠</span>{% endif %}
-        {% if h.visitada %}<span class="ribbon visited">✓ {{ t('visitada') }}</span>
-        {% else %}<span class="ribbon not-visited">✗ {{ t('not_visited') }}</span>{% endif %}
+        {{ ribbon(t, r.visit) }}
       </div>
       <div class="card-body">
-        <div class="card-title">
-          <h2>{{ h.title or t('untitled') }}</h2>
-          {% if h.status != 'activa' %}<span class="pill {{ h.status }}">{{ t(h.status) }}</span>{% endif %}
-          {% if r.pending_me %}<span class="pill pending">● {{ t('pending_me') }}</span>{% endif %}
+        <div class="card-head">
+          <div class="card-title">
+            <h2>{{ h.title or t('untitled') }}</h2>
+            {% if h.status != 'activa' %}<span class="pill {{ h.status }}">{{ t(h.status) }}</span>{% endif %}
+            {% if r.pending_me %}<span class="pill pending">● {{ t('pending_me') }}</span>{% endif %}
+          </div>
+          <p class="muted small">{{ h.address }}{% if h.address and h.price is not none %} · {% endif %}{{ price(h) }}</p>
         </div>
-        <p class="muted small">{{ h.address }}{% if h.address and h.price is not none %} · {% endif %}{{ price(h) }}</p>
         <div class="bars">{% for tp in TOPICS %}{{ bar(t(tp), r.topics[tp]) }}{% endfor %}</div>
-        <div class="chips">{% for f in HOUSE_QUESTIONS %}{{ chip(t, f, h[f]) }}{% endfor %}</div>
-        <div class="chips">{% for f in NEARBY %}{{ chip(t, f, h[f]) }}{% endfor %}</div>
+        <div class="card-chips">
+          <div class="chips">{% for f in HOUSE_QUESTIONS %}{{ chip(t, f, h[f]) }}{% endfor %}</div>
+          <div class="chips">{% for f in NEARBY %}{{ chip(t, f, h[f]) }}{% endfor %}</div>
+        </div>
       </div>
       <div class="card-score">
         {{ score_badge(r.overall, big=true) }}
-        {% if r.base is not none %}<span class="small muted breakdown">{{ t('score_breakdown', base='%.1f'|format(r.base), bonus='%+.1f'|format(r.bonus)) }}</span>{% endif %}
-        <span class="small muted">{{ t('amenities') }} {{ r.amenities_yes }}/{{ r.amenities_total }}</span>
-        {% if r.overall is none %}<span class="small muted">{{ t('not_rated') }}</span>
-        {% else %}<span class="small muted">{{ t('rated_by', n=r.rated_by, total=raters) }}</span>{% endif %}
-        {% if h.url %}<a class="small ext" href="{{ h.url }}" target="_blank" rel="noopener noreferrer">{{ t('open_listing') }} ↗</a>{% endif %}
+        {{ people_scores(t, raters, r.people) }}
+        {% if r.base is not none %}<span class="small muted breakdown">{{ t('score_breakdown', base='%.1f'|format(r.base), q='%.1f'|format(r.questions or 0)) }}</span>{% endif %}
+        {% if r.overall is none %}<span class="small muted">{{ t('not_rated') }}</span>{% endif %}
+        <span class="card-links small">
+          {% if r.comments %}<a href="/houses/{{ h.id }}#comments" title="{{ t('comments') }}">💬 {{ r.comments }}</a>{% endif %}
+          {% if h.url %}<a class="ext" href="{{ h.url }}" target="_blank" rel="noopener noreferrer">{{ t('open_listing') }} ↗</a>{% endif %}
+        </span>
+        {% if not h.visitada %}{{ to_visit_button(t, h, small=true) }}{% endif %}
       </div>
     </li>
   {% endfor %}

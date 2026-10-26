@@ -94,11 +94,15 @@
   <p class="muted small">{{ t('weights_hint') }}</p>
   <div class="row">
   {% for tp in TOPICS %}
-    <label class="grow">{{ t(tp) }}<input type="number" name="{{ tp }}" min="0" max="10" step="0.5" value="{{ '%g'|format(weights[tp]) }}"></label>
+    <label class="grow">{{ t(tp) }} <small class="muted">{{ '%.0f'|format(shares[tp]) }}%</small><input type="number" name="{{ tp }}" min="0" max="10" step="0.5" value="{{ '%g'|format(weights[tp]) }}"></label>
   {% endfor %}
   </div>
   <h2>{{ t('importance') }}</h2>
-  <p class="muted small">{{ t('importance_hint', step='%g'|format(BONUS_STEP), step2='%g'|format(BONUS_STEP * 2)) }}</p>
+  <label>{{ t('questions_share') }}
+    <input type="number" name="questions_share" min="0" max="50" step="1" value="{{ weights.share }}" style="max-width: 120px">
+    <small class="muted">{{ t('questions_share_hint', rest=100 - weights.share) }}</small>
+  </label>
+  <p class="muted small">{{ t('importance_hint') }}</p>
   <div class="importance">
   {% for f in FEATURES %}
     <label class="imp-row"><span>{{ t(f) }}</span>
