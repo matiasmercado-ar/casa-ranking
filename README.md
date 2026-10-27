@@ -48,7 +48,7 @@ together, but any number of people can rate.
 
 ![House detail](docs/house.png)
 
-<p align="center"><img src="docs/mobile.png" width="300" alt="Phone layout"> <img src="docs/dark.png" width="520" alt="Dark mode"></p>
+<p align="center"><img src="docs/mobile.png" width="300" alt="Phone layout"> <img src="docs/dark.png" width="520" alt="Compare view, dark mode"></p>
 
 ## Run it
 
