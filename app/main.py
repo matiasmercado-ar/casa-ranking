@@ -18,9 +18,9 @@ from starlette.middleware.sessions import SessionMiddleware
 from . import db, linkpreview
 from .db import AMENITIES, COMMENT_KINDS, COMMENT_MAX, FEATURES, HOUSE_QUESTIONS, NEARBY, STATUSES, TOPICS
 from .i18n import DEFAULT_LANG, LANGS, translate
-from .scoring import IMPORTANCE, house_scores, ranking, topic_shares, weights
+from .scoring import DEFAULT_WEIGHTS, IMPORTANCE, house_scores, ranking, topic_shares, weights
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 BASE = Path(__file__).parent
 CURRENCIES = ("USD", "ARS")
 MIN_PASSWORD = 8
@@ -521,10 +521,11 @@ async def save_weights(request: Request):
     form = await request.form()
     with db.session() as conn:
         for t in TOPICS:
+            default = DEFAULT_WEIGHTS.get(t, 1.0)
             try:
-                value = min(10.0, max(0.0, float(str(form.get(t, "1")).replace(",", "."))))
+                value = min(10.0, max(0.0, float(str(form.get(t, default)).replace(",", "."))))
             except ValueError:
-                value = 1.0
+                value = default
             db.set_setting(conn, f"weight_{t}", f"{value:g}")
         for f in FEATURES:
             value = str(form.get(f"importance_{f}", "1"))

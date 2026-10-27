@@ -2,8 +2,8 @@
 
 Score of a house, always on 0-10:
 
-1. Each person's stars: weighted average of their topics (Ubicación counts double by
-   default). A topic they haven't rated yet counts as a neutral 5, so a half-rated house
+1. Each person's stars: weighted average of their topics (by default Ubicación counts
+   double, Mejorable and Me gusta a bit less than the rest). A topic they haven't rated yet counts as a neutral 5, so a half-rated house
    can't look perfect.
 2. Everyone's opinion together: halfway between the average and the lowest opinion, so a
    house only ranks high when all raters like it.
@@ -15,7 +15,7 @@ Only 10 stars on every topic from everyone plus Yes to every question gives 10.0
 from .db import AMENITIES, FEATURES, TOPICS, get_setting
 
 IMPORTANCE = (0, 1, 2)
-DEFAULT_WEIGHTS = {"ubicacion": 2.0}  # topics not listed weigh 1
+DEFAULT_WEIGHTS = {"ubicacion": 2.0, "mejorable": 0.75, "me_gusta": 0.75}  # topics not listed weigh 1
 QUESTIONS_SHARE = 15  # % of the final score that comes from the Yes/No questions
 NEUTRAL = 5  # value of a topic a person hasn't rated yet
 ANSWER_CREDIT = {1: 1.0, None: 0.5, 0: 0.0}

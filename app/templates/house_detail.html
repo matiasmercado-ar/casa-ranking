@@ -49,7 +49,7 @@
 
   {% for tp in TOPICS %}
   <fieldset class="topic">
-    <legend>{{ t(tp) }}{% if tp == 'antiguedad' %} <small class="muted">({{ t('antiguedad_hint') }})</small>{% endif %}
+    <legend>{{ t(tp) }}{% if tp in ('antiguedad', 'mejorable', 'me_gusta') %} <small class="muted">({{ t(tp ~ '_hint') }})</small>{% endif %}
       <span class="topic-avg" data-topic="{{ tp }}">{{ '%.1f'|format(scores.topics[tp]) if scores.topics[tp] is not none else '–' }}</span>
     </legend>
     {% for rater in raters %}{% set cur = by_rater[rater.id][tp] if rater.id in by_rater else none %}

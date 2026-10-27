@@ -14,12 +14,14 @@ together, but any number of people can rate.
 - **Accounts**: everyone logs in. An admin account is created on first start; the admin
   adds users (name, email, password) and decides who rates.
 - **Per-person star ratings (0-10)** for *Ubicación* (location), *Vecindario*
-  (neighbourhood), *Construcción* (construction) and *Antigüedad* (age). Each person can
+  (neighbourhood), *Construcción* (construction), *Antigüedad* (age), *Mejorable* (how much
+  better it could be made) and *¿Me gusta?* (do I like it). Each person can
   only change their own stars (enforced server side); everyone else's are shown
   read-only, and every card shows each person's own score. A "Te falta puntuar" tag
   shows which houses you still have to rate.
 - **A score that means something** (0-10): each person's stars as a weighted average
-  (*Ubicación* counts double by default, an unrated topic counts as 5), then everyone's
+  (*Ubicación* counts double by default, *Mejorable* and *¿Me gusta?* a little less than
+  the rest, an unrated topic counts as 5), then everyone's
   opinions together, halfway between the average and the lowest one, so a house only
   ranks high when all of you like it. The Yes/No questions are 15% of the score. Only 10
   stars on everything from everyone plus Yes to every question gives 10.0.
@@ -28,8 +30,7 @@ together, but any number of people can rate.
 - **Filters**: minimum score, minimum stars per topic, must-have features, price range.
 - **Comments** on every house with their author, marked *Online* (looking at the
   listing) or *En persona* (after a visit), with a tab for each.
-- **Yes / No / "No sé" questions** that count towards the score: about the house (*¿Mejorable?*,
-  pet friendly, pool or room for one, room for an above-ground pool) and what's nearby
+- **Yes / No / "No sé" questions** that count towards the score: about the house (pet friendly, pool or room for one, room for an above-ground pool) and what's nearby
   (supermarket, school, public transport, gym, bike lane, park, hospital/clinic).
 - **Tunable**: topic weights, question importance and how much the questions count, in Settings.
 - **Statuses**: active, favourite, discarded (discarded ones are hidden from the ranking).

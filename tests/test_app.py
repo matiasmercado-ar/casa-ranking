@@ -120,10 +120,10 @@ def test_rating_and_ranking_order(users):
     ana.post(f"/houses/{a}/scores", data={"r2_ubicacion": "4", "status": "activa"})
     s = ana.post(f"/houses/{b}/scores", data={"r2_ubicacion": "9", "r2_vecindario": "7", "supermercado": "1",
                                                "plaza": "0", "status": "favorita"}, headers=JSON).json()
-    # Unrated topics count as a neutral 5: (9*2 + 7 + 5 + 5) / 5 = 7 stars.
-    assert s["base"] == 7
-    # 1 Yes, 1 No, 9 unknown = 5.5 of 11 -> 5.0; 85% stars + 15% questions.
-    assert s["questions"] == 5 and round(s["overall"], 2) == 6.7
+    # Unrated topics count as a neutral 5: (9*2 + 7 + 5 + 5 + 5*0.75*2) / 6.5 = 6.54 stars.
+    assert round(s["base"], 2) == 6.54
+    # 1 Yes, 1 No, 8 unknown = 5 of 10 -> 5.0; 85% stars + 15% questions.
+    assert s["questions"] == 5 and round(s["overall"], 2) == 6.31
     assert s["amenities_yes"] == 1
     page = ana.get("/").text
     assert page.index("Casa B") < page.index("Casa A")
@@ -134,7 +134,7 @@ def test_rating_and_ranking_order(users):
 def test_zero_is_a_score_and_empty_clears(users):
     ana, _ = users
     h = add_house(ana)
-    assert ana.post(f"/houses/{h}/scores", data={"r2_ubicacion": "0"}, headers=JSON).json()["base"] == 3  # (0 + 15) / 5
+    assert ana.post(f"/houses/{h}/scores", data={"r2_ubicacion": "0"}, headers=JSON).json()["base"] == 22.5 / 6.5  # (0 + 5*3 + 5*0.75*2) / 6.5
     assert ana.post(f"/houses/{h}/scores", data={"r2_ubicacion": ""}, headers=JSON).json()["overall"] is None
     assert ana.post(f"/houses/{h}/scores", data={"r2_ubicacion": "11"}, headers=JSON).json()["overall"] is None
 
@@ -144,7 +144,7 @@ def test_weights_change_overall(admin, users):
     h = add_house(ana)
     admin.post("/settings/weights", data={"ubicacion": "3", "vecindario": "1", "construccion": "1", "antiguedad": "1"})
     s = ana.post(f"/houses/{h}/scores", data={"r2_ubicacion": "10", "r2_construccion": "0"}, headers=JSON).json()
-    assert round(s["base"], 2) == 6.67  # (10*3 + 0 + 5 + 5) / 6
+    assert round(s["base"], 2) == 6.33  # (10*3 + 0 + 5 + 5 + 5*0.75*2) / 7.5
 
 
 def test_visited_flag_and_filter(users):
@@ -197,7 +197,7 @@ def stars(uid, **topics):
 def test_questions_are_a_share_of_the_score(admin, users):
     ana, _ = users
     h = add_house(ana)
-    base = stars(2, ubicacion=6, vecindario=6, construccion=6, antiguedad=6)
+    base = stars(2, **dict.fromkeys(db.TOPICS, 6))
     # Everything unknown = half credit.
     s = ana.post(f"/houses/{h}/scores", data=base, headers=JSON).json()
     assert s["base"] == 6 and s["questions"] == 5 and round(s["overall"], 2) == 5.85
@@ -208,7 +208,7 @@ def test_questions_are_a_share_of_the_score(admin, users):
     # Very important = double weight within the questions, 0 = ignored.
     admin.post("/settings/weights", data={"importance_pileta": "2", "importance_colegio": "0"})
     s = ana.post(f"/houses/{h}/scores", data={**base, **no, "pileta": "1"}, headers=JSON).json()
-    assert round(s["questions"], 2) == round(10 * 2 / 11, 2)  # pileta 2 of total 2 + colegio 0 + 9 others x 1
+    assert s["questions"] == 2  # pileta 2 of total 2 + colegio 0 + 8 others x 1
     # The admin can change how much the questions are worth.
     admin.post("/settings/weights", data={"questions_share": "0"})
     assert ana.post(f"/houses/{h}/scores", data={**base, **yes}, headers=JSON).json()["overall"] == 6
@@ -244,7 +244,8 @@ def test_typical_good_house_is_not_ten(users):
     ana, _ = users
     h = add_house(ana)
     yes = {f: "1" for f in db.FEATURES}
-    s = ana.post(f"/houses/{h}/scores", data={**stars(2, ubicacion=9, vecindario=9, construccion=8, antiguedad=9),
+    s = ana.post(f"/houses/{h}/scores", data={**stars(2, ubicacion=9, vecindario=9, construccion=8, antiguedad=9,
+                                                                    mejorable=7, me_gusta=9),
                                                **yes, "pileta": ""}, headers=JSON).json()
     assert 8.5 < s["overall"] < 9.5
 
@@ -257,7 +258,7 @@ def test_location_weighs_double_by_default(users):
                   headers=JSON).json()
     sb = ana.post(f"/houses/{b}/scores", data=stars(2, ubicacion=5, vecindario=5, construccion=10, antiguedad=5),
                   headers=JSON).json()
-    assert sa["base"] == 7 and sb["base"] == 6
+    assert round(sa["base"], 2) == 6.54 and round(sb["base"], 2) == 5.77  # 42.5 / 6.5 vs 37.5 / 6.5
 
 
 def test_both_opinions_count(users):
@@ -334,7 +335,7 @@ def test_migration_from_v1_keeps_data(env, monkeypatch):
         h = c.execute("SELECT * FROM houses WHERE id = 2").fetchone()
         assert h["visitada"] == 1 and h["status"] == "activa" and h["supermercado"] == 1
         assert h["currency"] == "USD" and h["pileta"] is None
-        assert c.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert c.execute("PRAGMA user_version").fetchone()[0] == 6
         assert h["a_visitar"] == 0
         assert c.execute("SELECT COUNT(*) FROM ratings").fetchone()[0] == 2
         assert db.get_setting(c, "weight_ubicacion") == "2"
@@ -508,10 +509,10 @@ def _filter_houses(ana, beto):
     b = add_house(ana, title="Barata con pileta", price="60000")
     c = add_house(ana, title="En pesos", price="90000", currency="ARS")
     add_house(ana, title="Sin puntuar")
-    ana.post(f"/houses/{a}/scores", data=stars(2, ubicacion=9, vecindario=9, construccion=9, antiguedad=9))
-    ana.post(f"/houses/{b}/scores", data={**stars(2, ubicacion=6, vecindario=7, construccion=5, antiguedad=5),
+    ana.post(f"/houses/{a}/scores", data=stars(2, **dict.fromkeys(db.TOPICS, 9)))
+    ana.post(f"/houses/{b}/scores", data={**stars(2, **{**dict.fromkeys(db.TOPICS, 5), "ubicacion": 6, "vecindario": 7}),
                                            "pileta": "1", "colegio": "1"})
-    ana.post(f"/houses/{c}/scores", data=stars(2, ubicacion=7, vecindario=7, construccion=7, antiguedad=7))
+    ana.post(f"/houses/{c}/scores", data=stars(2, **dict.fromkeys(db.TOPICS, 7)))
     return a, b, c
 
 
@@ -632,7 +633,7 @@ def test_export_includes_comments_and_people(users):
     ana.post(f"/houses/{h}/a-visitar", data={"on": "1"})
     row = ana.get("/export.json").json()[0]
     assert row["comments"][0]["author"] == "Beto" and row["comments"][0]["kind"] == "visita"
-    assert row["Ana_score"] == 6.2 and row["a_visitar"] is True and "questions_score" in row
+    assert row["Ana_score"] == 5.92 and row["a_visitar"] is True and "questions_score" in row
     assert "Beto (visita): linda" in ana.get("/export.csv").text
 
 
@@ -647,6 +648,54 @@ def test_compare_shows_people_and_visit_state(users):
 
 def test_settings_show_topic_shares_and_questions_share(admin):
     page = admin.get("/settings").text
-    assert "40%" in page and 'name="questions_share"' in page and 'value="15"' in page
+    assert "31%" in page and "12%" in page and 'name="questions_share"' in page and 'value="15"' in page
     admin.post("/settings/weights", data={"questions_share": "99"})  # out of range: kept
     assert 'name="questions_share" min="0" max="50" step="1" value="15"' in admin.get("/settings").text
+
+
+# --- v1.5: Mejorable and Me gusta are stars ------------------------------------------
+
+
+def test_mejorable_and_me_gusta_are_per_person_stars(users):
+    ana, beto = users
+    h = add_house(ana)
+    page = ana.get(f"/houses/{h}").text
+    assert 'name="r2_mejorable"' in page and 'name="r2_me_gusta"' in page and "¿Me gusta?" in page
+    assert 'name="mejorable"' not in page  # no longer a Yes/No question
+    ana.post(f"/houses/{h}/scores", data=stars(2, mejorable=8, me_gusta=10))
+    s = beto.post(f"/houses/{h}/scores", data=stars(3, me_gusta=6), headers=JSON).json()
+    assert s["topics"]["mejorable"] == 8 and s["topics"]["me_gusta"] == 8
+    assert 'name="r3_me_gusta" value="6" checked' in beto.get(f"/houses/{h}").text
+
+
+def test_mejorable_and_me_gusta_weigh_a_little_less(users):
+    ana, _ = users
+    a = add_house(ana)
+    b = add_house(ana)
+    rest = dict.fromkeys(db.TOPICS, 5)
+    sa = ana.post(f"/houses/{a}/scores", data=stars(2, **{**rest, "me_gusta": 10}), headers=JSON).json()
+    sb = ana.post(f"/houses/{b}/scores", data=stars(2, **{**rest, "construccion": 10}), headers=JSON).json()
+    assert 5 < sa["base"] < sb["base"]
+
+
+def test_migration_v5_clears_old_mejorable_answers(env, monkeypatch):
+    load_app(monkeypatch)  # fresh v6 DB, then roll it back to the v5 shape
+    with db.session() as c:
+        c.execute("INSERT INTO houses (id, title, mejorable, pileta) VALUES (5, 'Vieja', 1, 1)")
+        c.execute("INSERT INTO settings VALUES ('importance_mejorable', '2')")
+        c.execute("ALTER TABLE ratings DROP COLUMN mejorable")
+        c.execute("ALTER TABLE ratings DROP COLUMN me_gusta")
+        c.execute("PRAGMA user_version = 5")
+    load_app(monkeypatch)
+    with db.session() as c:
+        h = c.execute("SELECT * FROM houses WHERE id = 5").fetchone()
+        assert h["mejorable"] is None and h["pileta"] == 1
+        assert db.get_setting(c, "importance_mejorable") == ""
+        assert {"mejorable", "me_gusta"} <= {r[1] for r in c.execute("PRAGMA table_info(ratings)")}
+        assert c.execute("PRAGMA user_version").fetchone()[0] == 6
+
+
+def test_saving_weights_keeps_new_topic_defaults(admin):
+    admin.post("/settings/weights", data={"ubicacion": "2"})
+    with db.session() as c:
+        assert db.get_setting(c, "weight_me_gusta") == "0.75"

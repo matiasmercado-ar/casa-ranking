@@ -7,10 +7,10 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
-TOPICS = ("ubicacion", "vecindario", "construccion", "antiguedad")
+TOPICS = ("ubicacion", "vecindario", "construccion", "antiguedad", "mejorable", "me_gusta")
 # Yes/No/unknown questions. Order is the order shown in the UI.
 NEARBY = ("supermercado", "colegio", "transporte", "gimnasio", "ciclovia", "plaza", "hospital")
-HOUSE_QUESTIONS = ("mejorable", "pet_friendly", "pileta", "pelopincho")
+HOUSE_QUESTIONS = ("pet_friendly", "pileta", "pelopincho")
 FEATURES = HOUSE_QUESTIONS + NEARBY
 AMENITIES = NEARBY  # counted in the "Cerca x/7" summary
 STATUSES = ("activa", "favorita", "descartada")
@@ -98,6 +98,15 @@ CREATE TABLE comments (
 CREATE INDEX comments_house ON comments (house_id, created_at);
 """
 
+# v6: "mejorable" goes from a shared Yes/No question to per-person stars (how much better the
+# house could be); new "me gusta" stars. The old houses.mejorable answers are cleared, unused since.
+MIGRATION_V6 = """
+ALTER TABLE ratings ADD COLUMN mejorable INTEGER CHECK (mejorable BETWEEN 0 AND 10);
+ALTER TABLE ratings ADD COLUMN me_gusta INTEGER CHECK (me_gusta BETWEEN 0 AND 10);
+UPDATE houses SET mejorable = NULL;
+DELETE FROM settings WHERE key = 'importance_mejorable';
+"""
+
 
 def db_path() -> Path:
     return Path(os.environ.get("DATA_DIR", "./data")) / "casa-ranking.db"
@@ -157,6 +166,9 @@ def init() -> str | None:
         if version == 4:
             conn.executescript(MIGRATION_V5)
             version = 5
+        if version == 5:
+            conn.executescript(MIGRATION_V6)
+            version = 6
         conn.execute(f"PRAGMA user_version = {version}")
         return ensure_admin(conn)
 
