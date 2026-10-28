@@ -3,11 +3,13 @@ import io
 import json
 import logging
 import os
+import re
 import secrets
 import sqlite3
 import time
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -16,14 +18,18 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import db, linkpreview
-from .db import AMENITIES, COMMENT_KINDS, COMMENT_MAX, FEATURES, HOUSE_QUESTIONS, NEARBY, STATUSES, TOPICS
+from .db import (AMENITIES, COMMENT_KINDS, COMMENT_MAX, FEATURES, HOUSE_QUESTIONS, NEARBY, STATUSES, TOPICS,
+                 VISIT_NOTES_MAX)
 from .i18n import DEFAULT_LANG, LANGS, translate
 from .scoring import DEFAULT_WEIGHTS, IMPORTANCE, house_scores, ranking, topic_shares, weights
 
-__version__ = "1.5.0"
+__version__ = "1.6.0"
 BASE = Path(__file__).parent
 CURRENCIES = ("USD", "ARS")
 MIN_PASSWORD = 8
+# Argentina has been on UTC-3 all year since 2009 (no daylight saving), so a fixed offset is
+# enough and the image needs no tzdata. Visits are stored and shown in this time.
+ART = timezone(timedelta(hours=-3), "ART")
 log = logging.getLogger("uvicorn.error")
 
 
@@ -205,8 +211,10 @@ def index(request: Request, all: int = 0, tab: str = "todas", visitada: str = ""
         raters = _raters(conn)
         discarded = conn.execute("SELECT COUNT(*) FROM houses WHERE status = 'descartada'").fetchone()[0]
         comments = dict(conn.execute("SELECT house_id, COUNT(*) FROM comments GROUP BY house_id").fetchall())
+        next_visit = _next_visits(conn)
     me = request.state.user
     for r in rows:
+        r["next_visit"] = next_visit.get(r["house"]["id"])
         mine = r["ratings"].get(me["id"])
         r["pending_me"] = bool(me["can_rate"]) and (mine is None or any(mine[t] is None for t in TOPICS))
         r["visit"] = visit_state(r["house"])
@@ -321,11 +329,14 @@ def house_detail(request: Request, house_id: int, c: str = ""):
         w = weights(conn)
         scores = house_scores(h, rows, w)
         comments = _comments(conn, house_id)
+        visits = [_visit(v) for v in conn.execute(
+            "SELECT * FROM visits WHERE house_id = ? AND day || ' ' || time >= ? ORDER BY day, time",
+            (house_id, _now_key()))]
     # The logged-in user's row first: it is the only one they can edit.
     me = request.state.user
     raters = sorted(raters, key=lambda r: r["id"] != me["id"])
     return render(request, "house_detail.html", house=h, raters=raters, by_rater=scores["ratings"], scores=scores, w=w,
-                  comments=comments, visit=visit_state(h),
+                  comments=comments, visit=visit_state(h), visits=visits,
                   # Comment list filter (all / one kind) and the kind preselected for a new comment:
                   # the last one used, else "in person" once the house has been visited.
                   show_kind=c if c in COMMENT_KINDS else "todos",
@@ -487,6 +498,138 @@ def delete_comment(request: Request, comment_id: int):
     return RedirectResponse(f"/houses/{c['house_id']}?c={c['kind']}#comments", status_code=303)
 
 
+# --- calendar --------------------------------------------------------------
+
+
+def now_art() -> datetime:
+    return datetime.now(ART)
+
+
+def _now_key() -> str:
+    """'YYYY-MM-DD HH:MM' now in Argentina, comparable with day || ' ' || time."""
+    return now_art().strftime("%Y-%m-%d %H:%M")
+
+
+def _date(value: str) -> date | None:
+    try:
+        return date.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _hhmm(value: str) -> str | None:
+    value = (value or "").strip()[:5]
+    return value if re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", value) else None
+
+
+def _visit(row) -> dict:
+    return {**dict(row), "date": date.fromisoformat(row["day"])}
+
+
+VISIT_SELECT = ("SELECT v.*, h.title, h.address, u.name AS author FROM visits v "
+                "JOIN houses h ON h.id = v.house_id LEFT JOIN users u ON u.id = v.user_id ")
+
+
+def _next_visits(conn) -> dict[int, dict]:
+    """Each house's next visit from now on."""
+    out: dict[int, dict] = {}
+    for v in conn.execute("SELECT * FROM visits WHERE day || ' ' || time >= ? ORDER BY day, time", (_now_key(),)):
+        out.setdefault(v["house_id"], _visit(v))
+    return out
+
+
+def _cal_url(day: date, anchor: str = "") -> str:
+    return f"/calendar?m={day:%Y-%m}&d={day.isoformat()}{anchor}"
+
+
+@app.get("/calendar", response_class=HTMLResponse)
+def calendar_page(request: Request, m: str = "", d: str = "", house: int = 0, edit: int = 0):
+    now = now_art()
+    today = now.date()
+    with db.session() as conn:
+        editing = conn.execute("SELECT * FROM visits WHERE id = ?", (edit,)).fetchone() if edit else None
+        selected = _date(d) or (_date(editing["day"]) if editing else None)
+        try:
+            first = datetime.strptime(m, "%Y-%m").date()
+        except ValueError:
+            first = (selected or today).replace(day=1)
+        if selected is None and (first.year, first.month) == (today.year, today.month):
+            selected = today
+        # Whole weeks, Monday first, around the month.
+        start = first - timedelta(days=first.weekday())
+        next_month = (first + timedelta(days=32)).replace(day=1)
+        end = next_month - timedelta(days=1)
+        end += timedelta(days=6 - end.weekday())
+        rows = conn.execute(VISIT_SELECT + "WHERE v.day BETWEEN ? AND ? ORDER BY v.day, v.time, v.id",
+                            (start.isoformat(), end.isoformat())).fetchall()
+        if selected and not start <= selected <= end:
+            rows += conn.execute(VISIT_SELECT + "WHERE v.day = ? ORDER BY v.time, v.id", (selected.isoformat(),)).fetchall()
+        upcoming = [_visit(v) for v in conn.execute(
+            VISIT_SELECT + "WHERE v.day || ' ' || v.time >= ? ORDER BY v.day, v.time, v.id LIMIT 30",
+            (now.strftime("%Y-%m-%d %H:%M"),))]
+        keep = editing["house_id"] if editing else house
+        houses = conn.execute("SELECT id, title, address, status FROM houses WHERE status != 'descartada' OR id = ? "
+                              "ORDER BY title COLLATE NOCASE", (keep,)).fetchall()
+    by_day: dict[date, list] = {}
+    for v in rows:
+        by_day.setdefault(date.fromisoformat(v["day"]), []).append(_visit(v))
+    weeks = [[start + timedelta(days=7 * w + i) for i in range(7)] for w in range(((end - start).days + 1) // 7)]
+    return render(request, "calendar.html", first=first, prev=(first - timedelta(days=1)).replace(day=1),
+                  next=next_month, weeks=weeks, by_day=by_day, today=today, now=now, selected=selected,
+                  upcoming=upcoming, houses=houses, editing=editing, house_id=keep,
+                  form_day=(editing["day"] if editing else (selected or today).isoformat()), VISIT_NOTES_MAX=VISIT_NOTES_MAX)
+
+
+def _visit_form(conn, house_id: int, day: str, time_: str, notes: str):
+    """Validated (house_id, day, time, notes), or None if something is missing or wrong."""
+    when, hhmm = _date(day), _hhmm(time_)
+    exists = conn.execute("SELECT 1 FROM houses WHERE id = ?", (house_id,)).fetchone()
+    if not (exists and when and hhmm):
+        return None
+    return house_id, when, hhmm, notes.strip()[:VISIT_NOTES_MAX]
+
+
+@app.post("/visits")
+def create_visit(request: Request, house_id: int = Form(0), day: str = Form(""), time_: str = Form("", alias="time"),
+                 notes: str = Form("")):
+    with db.session() as conn:
+        v = _visit_form(conn, house_id, day, time_, notes)
+        if v is None:
+            flash(request, "err", "err_visit_invalid")
+            return RedirectResponse(f"/calendar?{urlencode({'house': house_id, 'd': day})}#visit-form", status_code=303)
+        conn.execute("INSERT INTO visits (house_id, user_id, day, time, notes) VALUES (?, ?, ?, ?, ?)",
+                     (v[0], request.state.user["id"], v[1].isoformat(), v[2], v[3]))
+    flash(request, "ok", "msg_visit_added")
+    return RedirectResponse(_cal_url(v[1], "#day"), status_code=303)
+
+
+@app.post("/visits/{visit_id}")
+def update_visit(request: Request, visit_id: int, house_id: int = Form(0), day: str = Form(""),
+                 time_: str = Form("", alias="time"), notes: str = Form("")):
+    with db.session() as conn:
+        if not conn.execute("SELECT 1 FROM visits WHERE id = ?", (visit_id,)).fetchone():
+            raise HTTPException(404)
+        v = _visit_form(conn, house_id, day, time_, notes)
+        if v is None:
+            flash(request, "err", "err_visit_invalid")
+            return RedirectResponse(f"/calendar?edit={visit_id}#visit-form", status_code=303)
+        conn.execute("UPDATE visits SET house_id = ?, day = ?, time = ?, notes = ? WHERE id = ?",
+                     (v[0], v[1].isoformat(), v[2], v[3], visit_id))
+    flash(request, "ok", "msg_saved")
+    return RedirectResponse(_cal_url(v[1], "#day"), status_code=303)
+
+
+@app.post("/visits/{visit_id}/delete")
+def delete_visit(request: Request, visit_id: int):
+    with db.session() as conn:
+        v = conn.execute("SELECT * FROM visits WHERE id = ?", (visit_id,)).fetchone()
+        if not v:
+            raise HTTPException(404)
+        conn.execute("DELETE FROM visits WHERE id = ?", (visit_id,))
+    flash(request, "ok", "msg_visit_deleted")
+    return RedirectResponse(_back_to(request, _cal_url(date.fromisoformat(v["day"]), "#day")), status_code=303)
+
+
 # --- settings --------------------------------------------------------------
 
 
@@ -619,6 +762,10 @@ def _export_rows(conn) -> list[dict]:
     for c in conn.execute("SELECT * FROM comments ORDER BY created_at, id"):
         comments.setdefault(c["house_id"], []).append(
             {"author": names.get(c["user_id"]), "kind": c["kind"], "text": c["body"], "at": c["created_at"]})
+    visits: dict[int, list] = {}
+    for v in conn.execute("SELECT * FROM visits ORDER BY day, time, id"):
+        visits.setdefault(v["house_id"], []).append(
+            {"day": v["day"], "time": v["time"], "notes": v["notes"], "by": names.get(v["user_id"])})
     out = []
     for row in ranking(conn, include_discarded=True):
         h = row["house"]
@@ -637,6 +784,7 @@ def _export_rows(conn) -> list[dict]:
         for uid, score in row["people"].items():
             item[f"{names.get(uid, uid)}_score"] = round(score, 2)
         item["comments"] = comments.get(h["id"], [])
+        item["visits"] = visits.get(h["id"], [])
         out.append(item)
     return out
 
@@ -656,6 +804,7 @@ def export_csv():
     buf = io.StringIO()
     for row in data:  # one cell per house: "Author (kind): text" lines
         row["comments"] = "\n".join(f"{c['author'] or '?'} ({c['kind']}): {c['text']}" for c in row["comments"])
+        row["visits"] = "\n".join(f"{v['day']} {v['time']}" + (f": {v['notes']}" if v["notes"] else "") for v in row["visits"])
     fields = list(dict.fromkeys(k for row in data for k in row))
     writer = csv.DictWriter(buf, fieldnames=fields)
     writer.writeheader()

@@ -17,6 +17,7 @@ STATUSES = ("activa", "favorita", "descartada")
 # Where a comment was made from: looking at the listing online, or after seeing the house in person.
 COMMENT_KINDS = ("online", "visita")
 COMMENT_MAX = 2000
+VISIT_NOTES_MAX = 2000
 
 # Version 1 as first released; later versions are migrations on top of it so
 # fresh installs and upgraded ones always end up with the same schema.
@@ -107,6 +108,21 @@ UPDATE houses SET mejorable = NULL;
 DELETE FROM settings WHERE key = 'importance_mejorable';
 """
 
+# v7: calendar of visits. Day and time are Argentina wall-clock time (no time zone stored).
+MIGRATION_V7 = """
+CREATE TABLE visits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    house_id INTEGER NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+    user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    day TEXT NOT NULL,
+    time TEXT NOT NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX visits_day ON visits (day, time);
+CREATE INDEX visits_house ON visits (house_id);
+"""
+
 
 def db_path() -> Path:
     return Path(os.environ.get("DATA_DIR", "./data")) / "casa-ranking.db"
@@ -169,6 +185,9 @@ def init() -> str | None:
         if version == 5:
             conn.executescript(MIGRATION_V6)
             version = 6
+        if version == 6:
+            conn.executescript(MIGRATION_V7)
+            version = 7
         conn.execute(f"PRAGMA user_version = {version}")
         return ensure_admin(conn)
 

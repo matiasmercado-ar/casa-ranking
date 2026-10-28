@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% from "_macros.html" import day_label, visit_item %}
+{% block title %}{{ t('nav_calendar') }} · {{ t('app_name') }}{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <h1>{{ t('nav_calendar') }}</h1>
+    <p class="muted">🕒 {{ t('cal_tz') }} · {{ t('cal_now') }}: {{ day_label(t, now.date()) }}, {{ now.strftime('%H:%M') }}</p>
+  </div>
+</section>
+
+<div class="cal-layout">
+  <section class="panel cal">
+    <div class="cal-head">
+      <a class="btn small" href="/calendar?m={{ prev.strftime('%Y-%m') }}" aria-label="{{ t('cal_prev') }}" title="{{ t('cal_prev') }}">‹</a>
+      <h2>{{ t('month_' ~ first.month) }} {{ first.year }}</h2>
+      <a class="btn small" href="/calendar?m={{ next.strftime('%Y-%m') }}" aria-label="{{ t('cal_next') }}" title="{{ t('cal_next') }}">›</a>
+      <a class="btn small ghost cal-today" href="/calendar">{{ t('cal_today') }}</a>
+    </div>
+    <div class="cal-grid" role="grid">
+      {% for i in range(7) %}<div class="cal-wd" role="columnheader">{{ t('wd_' ~ i) }}</div>{% endfor %}
+      {% for week in weeks %}{% for d in week %}{% set items = by_day.get(d, []) %}
+      <a role="gridcell" href="/calendar?m={{ first.strftime('%Y-%m') }}&d={{ d.isoformat() }}#day"
+         class="cal-day{% if d.month != first.month %} out{% endif %}{% if d == today %} today{% endif %}{% if d == selected %} sel{% endif %}{% if d < today %} past{% endif %}{% if items %} has{% endif %}"
+         {% if d == selected %}aria-current="date"{% endif %} aria-label="{{ day_label(t, d) }}{% if items %}: {{ items|length }}{% endif %}">
+        <span class="cal-n">{{ d.day }}</span>
+        {% for v in items[:3] %}<span class="cal-ev"><b>{{ v.time }}</b> {{ v.title or t('untitled') }}</span>{% endfor %}
+        {% if items|length > 3 %}<span class="cal-more">{{ t('cal_more', n=items|length - 3) }}</span>{% endif %}
+        {% if items %}<span class="cal-dots" aria-hidden="true">{% for v in items[:4] %}<i></i>{% endfor %}</span>{% endif %}
+      </a>
+      {% endfor %}{% endfor %}
+    </div>
+  </section>
+
+  <div class="cal-side">
+    <section class="panel" id="day">
+      {% if selected %}{% set items = by_day.get(selected, []) %}
+      <div class="panel-head"><h2>{{ day_label(t, selected) }}{% if selected == today %} <span class="pill pending">{{ t('cal_today') }}</span>{% endif %}</h2>
+        <a class="small" href="/calendar?m={{ selected.strftime('%Y-%m') }}&d={{ selected.isoformat() }}#visit-form">＋ {{ t('schedule_visit') }}</a></div>
+      {% if items %}<ol class="visit-list">{% for v in items %}{{ visit_item(t, v) }}{% endfor %}</ol>
+      {% else %}<p class="muted small">{{ t('cal_day_empty') }}</p>{% endif %}
+      {% else %}<p class="muted small">{{ t('cal_pick_day') }}</p>{% endif %}
+    </section>
+
+    <section class="panel" id="visit-form">
+      <h2>{{ t('edit_visit') if editing else t('schedule_visit') }}</h2>
+      <form class="form visit-form" method="post" action="{{ '/visits/%d'|format(editing.id) if editing else '/visits' }}">
+        <label>{{ t('visit_house') }}
+          <select name="house_id" required>
+            <option value="">{{ t('pick_house') }}</option>
+            {% for h in houses %}<option value="{{ h.id }}" {% if h.id == house_id %}selected{% endif %}>{{ h.title or t('untitled') }}{% if h.address %} · {{ h.address }}{% endif %}</option>{% endfor %}
+          </select>
+        </label>
+        <div class="row">
+          <label class="grow">{{ t('visit_day') }}<input type="date" name="day" value="{{ form_day }}" required></label>
+          <label class="grow"><span>{{ t('visit_time') }} <small class="muted">(ART)</small></span><input type="time" name="time" value="{{ editing.time if editing else '' }}" required></label>
+        </div>
+        <label>{{ t('visit_notes') }}
+          <textarea name="notes" rows="4" maxlength="{{ VISIT_NOTES_MAX }}" placeholder="{{ t('visit_notes_ph') }}">{{ editing.notes if editing else '' }}</textarea>
+        </label>
+        <div class="actions">
+          <button class="btn primary">{{ t('save') if editing else t('visit_save') }}</button>
+          {% if editing %}<a class="btn ghost" href="/calendar?m={{ editing.day[:7] }}&d={{ editing.day }}#day">{{ t('cancel') }}</a>{% endif %}
+        </div>
+      </form>
+    </section>
+  </div>
+
+  <section class="panel cal-upcoming">
+    <h2>{{ t('upcoming') }}</h2>
+    {% if upcoming %}<ol class="visit-list">{% for v in upcoming %}{{ visit_item(t, v, show_day=true) }}{% endfor %}</ol>
+    {% else %}<p class="muted small">{{ t('no_upcoming') }}</p>{% endif %}
+  </section>
+</div>
+{% endblock %}

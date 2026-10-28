@@ -28,6 +28,9 @@ together, but any number of people can rate.
 - **Visited, to visit, not visited**: tabs *Todas / Visitadas / Ir a visitar / Sin
   visitar*, an "Ir a visitar" button on every house, and a green / blue / red banner.
 - **Filters**: minimum score, minimum stars per topic, must-have features, price range.
+- **Calendar** of visits in Argentina time (UTC-3): a month view, the day's visits and the
+  upcoming ones. Each visit links to the house in the app and has notes (who you meet, what
+  to ask). The next visit also shows on the house page and its ranking card.
 - **Comments** on every house with their author, marked *Online* (looking at the
   listing) or *En persona* (after a visit), with a tab for each.
 - **Yes / No / "No sé" questions** that count towards the score: about the house (pet friendly, pool or room for one, room for an above-ground pool) and what's nearby

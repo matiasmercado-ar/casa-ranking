@@ -20,6 +20,7 @@
   <nav class="nav">
     <a href="/" {% if path == '/' %}aria-current="page"{% endif %}>{{ t('nav_ranking') }}</a>
     <a href="/compare" {% if path == '/compare' %}aria-current="page"{% endif %}>{{ t('nav_compare') }}</a>
+    <a href="/calendar" {% if path == '/calendar' %}aria-current="page"{% endif %}>{{ t('nav_calendar') }}</a>
     <a href="/settings" {% if path == '/settings' %}aria-current="page"{% endif %}>{{ t('nav_settings') }}</a>
   </nav>
   {% endif %}
@@ -56,6 +57,9 @@
   <a href="/houses/new" class="tab-add" {% if path == '/houses/new' %}aria-current="page"{% endif %}>
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg>
     <span>{{ t('nav_add_short') }}</span></a>
+  <a href="/calendar" {% if path == '/calendar' %}aria-current="page"{% endif %}>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3.5 10h17M8 3v4M16 3v4" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
+    <span>{{ t('nav_calendar') }}</span></a>
   <a href="/settings" {% if path == '/settings' %}aria-current="page"{% endif %}>
     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 21a8 8 0 0 1 16 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
     <span>{{ t('nav_settings') }}</span></a>

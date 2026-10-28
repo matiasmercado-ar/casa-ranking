@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import score_badge, bar, chip, price, people_scores, ribbon, to_visit_button %}
+{% from "_macros.html" import score_badge, bar, chip, price, people_scores, ribbon, to_visit_button, day_label %}
 {% block content %}
 <section class="hero">
   <div>
@@ -116,6 +116,7 @@
         {{ people_scores(t, raters, r.people) }}
         {% if r.base is not none %}<span class="small muted breakdown">{{ t('score_breakdown', base='%.1f'|format(r.base), q='%.1f'|format(r.questions or 0)) }}</span>{% endif %}
         {% if r.overall is none %}<span class="small muted">{{ t('not_rated') }}</span>{% endif %}
+        {% if r.next_visit %}{% set nv = r.next_visit %}<a class="next-visit small" href="/calendar?m={{ nv.day[:7] }}&d={{ nv.day }}#visit-{{ nv.id }}">📅 {{ day_label(t, nv.date) }}, {{ nv.time }}</a>{% endif %}
         <span class="card-links small">
           {% if r.comments %}<a href="/houses/{{ h.id }}#comments" title="{{ t('comments') }}">💬 {{ r.comments }}</a>{% endif %}
           {% if h.url %}<a class="ext" href="{{ h.url }}" target="_blank" rel="noopener noreferrer">{{ t('open_listing') }} ↗</a>{% endif %}

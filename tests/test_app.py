@@ -1,5 +1,8 @@
 import re
 import sqlite3
+from datetime import datetime, timedelta, timezone
+
+import pytest
 
 from fastapi.testclient import TestClient
 
@@ -335,7 +338,7 @@ def test_migration_from_v1_keeps_data(env, monkeypatch):
         h = c.execute("SELECT * FROM houses WHERE id = 2").fetchone()
         assert h["visitada"] == 1 and h["status"] == "activa" and h["supermercado"] == 1
         assert h["currency"] == "USD" and h["pileta"] is None
-        assert c.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert c.execute("PRAGMA user_version").fetchone()[0] == 7
         assert h["a_visitar"] == 0
         assert c.execute("SELECT COUNT(*) FROM ratings").fetchone()[0] == 2
         assert db.get_setting(c, "weight_ubicacion") == "2"
@@ -685,6 +688,7 @@ def test_migration_v5_clears_old_mejorable_answers(env, monkeypatch):
         c.execute("INSERT INTO settings VALUES ('importance_mejorable', '2')")
         c.execute("ALTER TABLE ratings DROP COLUMN mejorable")
         c.execute("ALTER TABLE ratings DROP COLUMN me_gusta")
+        c.execute("DROP TABLE visits")
         c.execute("PRAGMA user_version = 5")
     load_app(monkeypatch)
     with db.session() as c:
@@ -692,10 +696,122 @@ def test_migration_v5_clears_old_mejorable_answers(env, monkeypatch):
         assert h["mejorable"] is None and h["pileta"] == 1
         assert db.get_setting(c, "importance_mejorable") == ""
         assert {"mejorable", "me_gusta"} <= {r[1] for r in c.execute("PRAGMA table_info(ratings)")}
-        assert c.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert c.execute("PRAGMA user_version").fetchone()[0] == 7
 
 
 def test_saving_weights_keeps_new_topic_defaults(admin):
     admin.post("/settings/weights", data={"ubicacion": "2"})
     with db.session() as c:
         assert db.get_setting(c, "weight_me_gusta") == "0.75"
+
+
+# --- calendar ------------------------------------------------------------------
+
+NOW = datetime(2026, 10, 28, 14, 30)  # a Wednesday, Argentina time
+
+
+@pytest.fixture
+def frozen(main, monkeypatch):
+    monkeypatch.setattr(main, "now_art", lambda: NOW.replace(tzinfo=main.ART))
+
+
+def add_visit(client, house_id, day="2026-10-30", time="10:30", notes=""):
+    return client.post("/visits", data={"house_id": house_id, "day": day, "time": time, "notes": notes},
+                       follow_redirects=False)
+
+
+def test_argentina_time_is_utc_minus_3(main):
+    assert main.ART.utcoffset(None) == timedelta(hours=-3)
+    utc_now = datetime.now(timezone.utc)
+    assert abs(main.now_art() - utc_now) < timedelta(seconds=5)
+    assert main.now_art().utcoffset() == timedelta(hours=-3)
+
+
+def test_calendar_month_grid_and_today(users, frozen):
+    ana, _ = users
+    page = ana.get("/calendar").text
+    assert "Octubre 2026" in page and "Hora de Argentina (UTC−3)" in page
+    assert "Mié 28/10, 14:30" in page  # "now" line
+    # Weeks start on Monday: Oct 2026 starts on a Thursday, so the grid opens on Mon Sep 28.
+    first = re.search(r'href="/calendar\?m=2026-10&d=([\d-]+)#day"', page).group(1)
+    assert first == "2026-09-28"
+    assert 'aria-current="date"' in page  # today selected by default
+    assert ana.get("/calendar?m=2026-11").text.count("Noviembre 2026") == 1
+    assert "Octubre 2026" in ana.get("/calendar?m=junk").text
+
+
+def test_schedule_visit_with_house_link_and_notes(users, frozen):
+    ana, beto = users
+    hid = add_house(ana, title="Casa del lago", url="https://example.com/aviso/1")
+    r = add_visit(ana, hid, notes="Hablar con Marta (inmobiliaria)\nPreguntar por expensas")
+    assert r.status_code == 303 and r.headers["location"] == "/calendar?m=2026-10&d=2026-10-30#day"
+    page = beto.get("/calendar?m=2026-10&d=2026-10-30").text
+    assert f'href="/houses/{hid}"' in page  # internal link, not the listing
+    assert "Hablar con Marta (inmobiliaria)\nPreguntar por expensas" in page
+    assert "agendó Ana" in page and "10:30" in page
+    # Upcoming list, the house page and the ranking card all show it.
+    assert "Vie 30/10" in beto.get("/calendar").text
+    assert "📅 Vie 30/10, 10:30" in beto.get(f"/houses/{hid}").text
+    assert "📅 Vie 30/10, 10:30" in beto.get("/").text
+
+
+def test_visit_needs_house_day_and_time(users, frozen):
+    ana, _ = users
+    hid = add_house(ana)
+    for data in ({"house_id": 999}, {"day": "30/10/2026"}, {"time": "25:00"}, {"time": ""}):
+        r = add_visit(ana, **{"house_id": hid, **data})
+        assert "visit-form" in r.headers["location"]
+    with db.session() as c:
+        assert c.execute("SELECT COUNT(*) FROM visits").fetchone()[0] == 0
+
+
+def test_edit_and_delete_visit(users, frozen):
+    ana, beto = users
+    h1, h2 = add_house(ana, title="Uno"), add_house(ana, title="Dos")
+    add_visit(ana, h1)
+    with db.session() as c:
+        vid = c.execute("SELECT id FROM visits").fetchone()[0]
+    form = beto.get(f"/calendar?edit={vid}").text
+    assert "Editar visita" in form and f'action="/visits/{vid}"' in form and 'value="10:30"' in form
+    beto.post(f"/visits/{vid}", data={"house_id": h2, "day": "2026-11-02", "time": "18:00", "notes": "Llevar metro"})
+    with db.session() as c:
+        v = c.execute("SELECT * FROM visits WHERE id = ?", (vid,)).fetchone()
+        assert (v["house_id"], v["day"], v["time"], v["notes"]) == (h2, "2026-11-02", "18:00", "Llevar metro")
+    assert beto.post(f"/visits/{vid}/delete", follow_redirects=False).status_code == 303
+    assert beto.post(f"/visits/{vid}/delete").status_code == 404
+    assert beto.post("/visits/999", data={"house_id": h1, "day": "2026-11-02", "time": "18:00"}).status_code == 404
+
+
+def test_past_visits_leave_upcoming_and_go_with_house(users, frozen):
+    ana, _ = users
+    hid = add_house(ana, title="Vieja")
+    add_visit(ana, hid, day="2026-10-28", time="09:00")  # earlier today
+    add_visit(ana, hid, day="2026-10-28", time="15:00", notes="más tarde")
+    page = ana.get(f"/houses/{hid}").text
+    assert "15:00" in page and "09:00" not in page
+    assert "Mié 28/10, 15:00" in ana.get("/").text
+    ana.post(f"/houses/{hid}/delete")
+    with db.session() as c:
+        assert c.execute("SELECT COUNT(*) FROM visits").fetchone()[0] == 0
+
+
+def test_visit_notes_are_escaped(users, frozen):
+    ana, _ = users
+    add_visit(ana, add_house(ana), notes="<script>alert(1)</script>")
+    page = ana.get("/calendar?d=2026-10-30").text
+    assert "<script>alert(1)" not in page and "&lt;script&gt;" in page
+
+
+def test_export_includes_visits(users, frozen):
+    ana, _ = users
+    hid = add_house(ana)
+    add_visit(ana, hid, notes="Marta")
+    item = ana.get("/export.json").json()[0]
+    assert item["visits"] == [{"day": "2026-10-30", "time": "10:30", "notes": "Marta", "by": "Ana"}]
+    assert "2026-10-30 10:30: Marta" in ana.get("/export.csv").text
+
+
+def test_calendar_in_navigation(users):
+    ana, _ = users
+    page = ana.get("/").text
+    assert page.count('href="/calendar"') == 2  # top nav and phone tab bar

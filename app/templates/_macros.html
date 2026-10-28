@@ -47,3 +47,24 @@
     📍 {{ t('a_visitar_on') if h.a_visitar else t('a_visitar') }}</button>
 </form>
 {%- endmacro %}
+
+{% macro day_label(t, d) -%}
+{{ t('wd_' ~ d.weekday()) }} {{ '%02d/%02d'|format(d.day, d.month) }}
+{%- endmacro %}
+
+{% macro visit_item(t, v, show_day=false) %}
+<li class="visit" id="visit-{{ v.id }}">
+  <span class="visit-when">{% if show_day %}<span class="visit-day">{{ day_label(t, v.date) }}</span>{% endif %}<strong>{{ v.time }}</strong></span>
+  <div class="visit-main">
+    <a class="visit-house" href="/houses/{{ v.house_id }}">🏠 {{ v.title or t('untitled') }}</a>
+    {% if v.address %}<span class="muted small">{{ v.address }}</span>{% endif %}
+    {% if v.notes %}<p class="visit-notes">{{ v.notes }}</p>{% endif %}
+    <span class="visit-foot small muted">
+      {% if v.author %}{{ t('visit_by', name=v.author) }} · {% endif %}
+      <a href="/calendar?edit={{ v.id }}&m={{ v.day[:7] }}&d={{ v.day }}#visit-form">{{ t('edit') }}</a>
+      <form method="post" action="/visits/{{ v.id }}/delete" onsubmit="return confirm('{{ t('delete_visit_confirm') }}')">
+        <button class="link-btn">{{ t('delete') }}</button></form>
+    </span>
+  </div>
+</li>
+{% endmacro %}

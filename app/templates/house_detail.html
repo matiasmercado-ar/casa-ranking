@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import score_badge, bar, price, people_scores, to_visit_button %}
+{% from "_macros.html" import score_badge, bar, price, people_scores, to_visit_button, day_label %}
 {% block title %}{{ house.title or t('untitled') }} · {{ t('app_name') }}{% endblock %}
 {% block content %}
 <a class="back" href="/">← {{ t('nav_ranking') }}</a>
@@ -14,9 +14,15 @@
       {% elif house.address %}{% set maps = 'https://www.google.com/maps/search/?api=1&query=' ~ house.address|urlencode %}{% endif %}
       {% if maps %}<a class="btn" href="{{ maps }}" target="_blank" rel="noopener noreferrer">📍 {{ t('open_map') }}</a>{% endif %}
       {% if not house.visitada %}{{ to_visit_button(t, house) }}{% endif %}
+      <a class="btn" href="/calendar?house={{ house.id }}#visit-form">📅 {{ t('schedule_visit') }}</a>
       <a class="btn" href="/houses/{{ house.id }}/edit">{{ t('edit') }}</a>
       {% if house.url %}<form method="post" action="/houses/{{ house.id }}/refresh-preview" data-busy="{{ t('importing') }}"><button class="btn ghost">↻ {{ t('refresh_preview') }}</button></form>{% endif %}
     </div>
+    {% if visits %}
+    <ul class="house-visits">
+      {% for v in visits %}<li><a href="/calendar?m={{ v.day[:7] }}&d={{ v.day }}#visit-{{ v.id }}">📅 {{ day_label(t, v.date) }}, {{ v.time }}</a>{% if v.notes %} <span class="muted small">· {{ v.notes|truncate(60) }}</span>{% endif %}</li>{% endfor %}
+    </ul>
+    {% endif %}
     {% if house.notes %}<p class="notes">{{ house.notes }}</p>{% endif %}
   </div>
   <div class="detail-score">
