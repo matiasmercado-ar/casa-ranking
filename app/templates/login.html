@@ -2,7 +2,7 @@
 {% block title %}{{ t('login_title') }} · {{ t('app_name') }}{% endblock %}
 {% block content %}
 <form class="panel form login" method="post" action="/login">
-  <div class="login-logo"><img src="/static/favicon.svg" alt="" width="64" height="64"></div>
+  <div class="login-logo"><img src="/static/logo.svg" alt="" width="72" height="72"></div>
   <h1>{{ t('app_name') }}</h1>
   <p class="muted">{{ t('login_title') }}</p>
   <label>{{ t('email_or_user') }}<input type="text" name="email" value="{{ email }}" autofocus required autocomplete="username" autocapitalize="none" spellcheck="false"></label>

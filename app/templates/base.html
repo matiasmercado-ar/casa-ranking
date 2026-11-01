@@ -3,11 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#f3f4f6" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#0c0d10" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#FFFFFF" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1B2230" media="(prefers-color-scheme: dark)">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&display=swap">
   <title>{% block title %}{{ t('app_name') }}{% endblock %}</title>
   <script>
     // Apply the saved theme before first paint to avoid a flash.
@@ -19,7 +19,7 @@
 </head>
 <body class="{% if me %}authed{% endif %}">
 <header class="topbar">
-  <a class="brand" href="/"><img src="/static/favicon.svg" alt="" width="28" height="28"><span>{{ t('app_name') }}</span></a>
+  <a class="brand" href="/" aria-label="{{ t('app_name') }}"><img src="/static/logo.svg" alt="" width="30" height="30"><span><b>Casa</b> <span>Ranking</span></span></a>
   {% if me %}
   <nav class="nav">
     <a href="/" {% if path == '/' %}aria-current="page"{% endif %}>{{ t('nav_ranking') }}</a>

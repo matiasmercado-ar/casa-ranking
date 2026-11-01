@@ -5,7 +5,7 @@ LANGS = ("es", "en")
 
 STRINGS: dict[str, dict[str, str]] = {
     "app_name": {"es": "Casa Ranking", "en": "Casa Ranking"},
-    "tagline": {"es": "Elegí tu próxima casa con datos, no con corazonadas.", "en": "Pick your next home with data, not hunches."},
+    "tagline": {"es": "Pegá el link. Puntuala. Elijan su casa juntos.", "en": "Paste it. Rank it. Choose your home together."},
     "nav_ranking": {"es": "Ranking", "en": "Ranking"},
     "nav_compare": {"es": "Comparar", "en": "Compare"},
     "nav_settings": {"es": "Ajustes", "en": "Settings"},
