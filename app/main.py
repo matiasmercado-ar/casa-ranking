@@ -23,7 +23,7 @@ from .db import (AMENITIES, COMMENT_KINDS, COMMENT_MAX, FEATURES, HOUSE_QUESTION
 from .i18n import DEFAULT_LANG, LANGS, translate
 from .scoring import DEFAULT_WEIGHTS, IMPORTANCE, house_scores, ranking, topic_shares, weights
 
-__version__ = "2.0.0"
+__version__ = "2.0.1"
 BASE = Path(__file__).parent
 CURRENCIES = ("USD", "ARS")
 MIN_PASSWORD = 8

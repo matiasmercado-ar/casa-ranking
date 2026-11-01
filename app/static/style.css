@@ -180,7 +180,9 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 .card-link { position: absolute; inset: 0; border-radius: var(--radius); }
 .card .ext, .card a:not(.card-link) { position: relative; z-index: 1; }
 .card.status-descartada { opacity: .55; }
-.card:has(.stage-menu[open]) { z-index: 20; }
+.card:has(.stage-menu[open]) { z-index: 50; }
+.stage-menu[open] { z-index: 60; }
+.stage-menu:not([open]) .stage-form.menu { display: none; }
 
 /* "Ir a visitar" progress: 3 dots, filled up to the current step. */
 .steps { display: none; align-items: center; gap: 4px; font-size: .68rem; font-weight: 700; color: var(--muted); white-space: nowrap; }
@@ -681,23 +683,32 @@ label.check { display: flex; align-items: center; gap: 8px; font-size: .9rem; ma
   .hero { margin-bottom: 12px; }
   .hero-add { flex-basis: 100%; }
   .toolbar { position: static; margin: 0 -16px 12px; padding: 8px 16px; max-height: none; }
-  .card { grid-template-columns: 92px minmax(0, 1fr); grid-template-areas: "rail rail" "thumb head" "bars bars" "score score" "actions actions"; gap: 0 12px; align-items: start; }
+  .card { grid-template-columns: 104px minmax(0, 1fr) auto; grid-template-areas: "rail rail rail" "thumb head head" "bars bars bars" "score score actions"; gap: 0; align-items: start; }
   .card-body { display: contents; }
   .rail { grid-area: rail; flex-direction: row; justify-content: flex-start; padding: 8px 80px 8px 16px; gap: 10px; min-height: 48px; border-radius: calc(var(--radius) - 1px) calc(var(--radius) - 1px) 0 0; }
   .rail .steps-label { display: none; }
   .rank { min-width: 34px; height: 34px; font-size: 1rem; }
   .card .thumb { grid-area: thumb; width: 92px; margin: 12px 0 0 12px; }
-  .card-head { grid-area: head; padding: 12px 12px 0 0; min-width: 0; }
+  .card-head { grid-area: head; padding: 12px 12px 0 12px; min-width: 0; }
   .meta { font-size: .84rem; flex-direction: column; gap: 0; }
   .bars { grid-area: bars; padding: 12px 12px 0; gap: 8px 12px; }
-  .card-score { grid-area: score; flex-direction: row; padding: 10px 12px 0; margin-top: 12px; border-top: 1px solid var(--border); }
-  .card-actions { grid-area: actions; flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: space-between; padding: 8px 12px 12px; }
-  .card-actions .card-links { order: 0; }
+  .card-score { grid-area: score; flex-direction: row; align-self: stretch; padding: 10px 0 12px 12px; margin-top: 12px; border-top: 1px solid var(--border); }
+  .card-actions { grid-area: actions; flex-direction: row; flex-wrap: nowrap; align-items: center; justify-content: flex-end; gap: 10px;
+    align-self: stretch; padding: 10px 12px 12px 12px; margin-top: 12px; border-top: 1px solid var(--border); }
   .card-score .badge.big { position: absolute; top: 7px; right: 10px; z-index: 2; pointer-events: none; font-size: 1.1rem; min-width: 54px; padding: 5px 8px; border-radius: 12px; }
-  .card-actions .card-links { flex-basis: 100%; justify-content: flex-start; }
+  .card-actions .card-links { flex-wrap: nowrap; }
   .rail .ribbon { white-space: nowrap; }
   .card-actions .stage-menu > summary { width: auto; }
-  .stage-form.menu { right: 0; }
+  /* "Cambiar estado" opens as a bottom sheet: always on screen, big tap targets, tap outside to close. */
+  .stage-menu[open] > summary::before { content: ""; position: fixed; inset: 0; z-index: 1; background: rgba(15, 23, 42, .45); cursor: default; }
+  .stage-menu[open] .stage-form.menu {
+    position: fixed; left: 10px; right: 10px; top: auto; bottom: calc(10px + env(safe-area-inset-bottom)); z-index: 2;
+    min-width: 0; max-height: 80vh; overflow-y: auto; padding: 8px 8px 10px; border-radius: 18px; box-shadow: 0 -4px 30px rgba(0, 0, 0, .25);
+  }
+  .stage-form.menu::before { content: ""; align-self: center; width: 40px; height: 4px; border-radius: 2px; background: var(--border); margin: 2px 0 6px; }
+  .mi { padding: 13px 14px; font-size: 1rem; }
+  .mi.sub { padding-left: 32px; }
+  .mi .dot { width: 11px; height: 11px; }
   .card-actions .btn.small { white-space: normal; }
   h1 { font-size: 1.5rem; }
   .hero p { margin: 0; }
@@ -706,6 +717,10 @@ label.check { display: flex; align-items: center; gap: 8px; font-size: .9rem; ma
   .detail-head { grid-template-columns: 1fr; gap: 12px; }
   .detail-photo { max-height: 220px; aspect-ratio: auto; height: 160px; }
   .detail-photo:has(img) { height: auto; aspect-ratio: 16 / 9; }
+  .detail-head .detail-photo .ribbon { display: none; }
+  .detail-info .actions.wrap-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .detail-info .actions.wrap-row > *, .detail-info .actions.wrap-row form .btn { width: 100%; }
+  .detail-info .actions.wrap-row .btn { padding: 9px 10px; }
   .panel { padding: 14px; }
   .rate-row.mine { margin: 2px -6px; padding: 8px 6px; }
   .rate-row { grid-template-columns: 1fr 32px; }
@@ -718,12 +733,14 @@ label.check { display: flex; align-items: center; gap: 8px; font-size: .9rem; ma
   .form label.imp-row { flex-direction: column; align-items: stretch; gap: 4px; }
   .imp-row select { width: 100%; }
   .breakdown { white-space: normal; }
-  .quickadd .btn { padding: 9px 12px; }
+  .quickadd { flex-direction: column; padding: 6px; }
+  .quickadd input { padding: 11px 12px; }
+  .quickadd .btn { width: 100%; padding: 11px 12px; }
   .filter-grid { grid-template-columns: 1fr; }
   .filter-form { padding: 12px; }
   .tabs { gap: 0; }
   .tab { padding: 6px 11px; font-size: .82rem; }
-  .filters-panel .list-meta { margin-left: 0; width: 100%; justify-content: space-between; }
+  .filters-panel .list-meta { margin-left: auto; }
   .kind-toggle label { padding: 8px; }
   .detail-score .people { flex-direction: row; }
   .how { max-width: none; }
