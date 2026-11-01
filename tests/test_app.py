@@ -12,6 +12,10 @@ from conftest import ADMIN_PW, load_app, login
 JSON = {"Accept": "application/json"}
 
 
+def set_stage(client, house_id, stage, **kw):
+    return client.post(f"/houses/{house_id}/stage", data={"stage": stage}, **kw)
+
+
 def add_house(client, **data):
     data.setdefault("title", "Casa test")
     r = client.post("/houses", data=data, follow_redirects=False)
@@ -154,9 +158,9 @@ def test_visited_flag_and_filter(users):
     ana, _ = users
     v = add_house(ana, title="Fuimos")
     add_house(ana, title="Online")
-    ana.post(f"/houses/{v}/scores", data={"visitada": "1"})
+    set_stage(ana, v, "visitada")
     page = ana.get("/").text
-    assert "ribbon visited" in page and "ribbon not-visited" in page and "No visitada" in page
+    assert 'data-stage="visitada"' in page and 'data-stage="ninguna"' in page and "No visitada" in page
     only = ana.get("/?visitada=si").text
     assert "Fuimos" in only and "Online" not in only
     assert "Online" in ana.get("/?visitada=no").text and "Fuimos" not in ana.get("/?visitada=no").text
@@ -182,7 +186,8 @@ def test_edit_and_delete(users):
 def test_exports(users):
     ana, _ = users
     h = add_house(ana, title="Exportada")
-    ana.post(f"/houses/{h}/scores", data={"r2_vecindario": "8", "colegio": "1", "visitada": "1"})
+    ana.post(f"/houses/{h}/scores", data={"r2_vecindario": "8", "colegio": "1"})
+    set_stage(ana, h, "visitada")
     data = ana.get("/export.json").json()
     assert data[0]["title"] == "Exportada" and data[0]["Ana_vecindario"] == 8
     assert data[0]["colegio"] is True and data[0]["visitada"] is True
@@ -338,8 +343,8 @@ def test_migration_from_v1_keeps_data(env, monkeypatch):
         h = c.execute("SELECT * FROM houses WHERE id = 2").fetchone()
         assert h["visitada"] == 1 and h["status"] == "activa" and h["supermercado"] == 1
         assert h["currency"] == "USD" and h["pileta"] is None
-        assert c.execute("PRAGMA user_version").fetchone()[0] == 7
-        assert h["a_visitar"] == 0
+        assert c.execute("PRAGMA user_version").fetchone()[0] == 9
+        assert h["stage"] == "visitada" and h["a_visitar"] == 0 and h["contactada"] == 0
         assert c.execute("SELECT COUNT(*) FROM ratings").fetchone()[0] == 2
         assert db.get_setting(c, "weight_ubicacion") == "2"
     page = matias.get("/houses/2").text
@@ -453,55 +458,56 @@ def _titles(page):
     return re.findall(r'<h2>([^<]+)</h2>', page.split('<ol class="cards">', 1)[1]) if '<ol class="cards">' in page else []
 
 
-def test_to_visit_button_and_tabs(users):
+def test_stage_tabs_split_the_houses(users):
     ana, beto = users
     fuimos = add_house(ana, title="Fuimos")
     plan = add_house(ana, title="Vamos el sabado")
     add_house(ana, title="Solo online")
-    ana.post(f"/houses/{fuimos}/scores", data={"visitada": "1"})
-    r = beto.post(f"/houses/{plan}/a-visitar", data={"on": "1"}, headers=JSON)
-    assert r.json() == {"a_visitar": True, "visit": "a_visitar"}
-    # The tabs split the houses with no overlap.
-    assert _titles(ana.get("/?tab=visitadas").text) == ["Fuimos"]
+    set_stage(ana, fuimos, "visitada")
+    r = set_stage(beto, plan, "a_visitar", headers=JSON)
+    assert r.json() == {"stage": "a_visitar"}
+    assert _titles(ana.get("/?tab=visitada").text) == ["Fuimos"]
     assert _titles(ana.get("/?tab=a_visitar").text) == ["Vamos el sabado"]
+    assert _titles(ana.get("/?tab=ir").text) == ["Vamos el sabado"]
+    assert _titles(ana.get("/?tab=ninguna").text) == ["Solo online"]
+    # Old tab names still work.
+    assert _titles(ana.get("/?tab=visitadas").text) == ["Fuimos"]
     assert _titles(ana.get("/?tab=sin_visitar").text) == ["Solo online"]
     page = ana.get("/").text
     assert len(_titles(page)) == 3
-    for tab, n in (("todas", 3), ("visitadas", 1), ("a_visitar", 1), ("sin_visitar", 1)):
-        assert re.search(rf'class="tab tab-{tab}"[^>]*>\s*[^<]+<span class="tab-n">{n}</span>', page), tab
-    # Every unvisited card has the button; it shows its state.
-    assert page.count('class="to-visit-form"') == 2 and 'aria-pressed="true"' in page
-    # Without JS: a plain POST toggles and goes back to the page it came from.
-    r = ana.post(f"/houses/{plan}/a-visitar", headers={"referer": "http://testserver/?tab=a_visitar"},
-                 follow_redirects=False)
+    for tab, n in (("todas", 3), ("ninguna", 1), ("ir", 1), ("a_visitar", 1), ("contactada", 0), ("agendada", 0), ("visitada", 1)):
+        assert re.search(rf'class="tab tab-{tab} st-{tab}"[^>]*>(?:<i[^>]*></i>)?[^<]+<span class="tab-n">{n}</span>', page), tab
+    # Without JS: a plain POST changes it and goes back to the page it came from.
+    r = set_stage(ana, plan, "ninguna", headers={"referer": "http://testserver/?tab=a_visitar"}, follow_redirects=False)
     assert r.headers["location"] == "/?tab=a_visitar"
     assert _titles(ana.get("/?tab=a_visitar").text) == []
 
 
-def test_visiting_clears_to_visit(users):
+def test_stage_route_checks_its_input(users):
     ana, _ = users
     h = add_house(ana)
-    ana.post(f"/houses/{h}/a-visitar", data={"on": "1"})
-    s = ana.post(f"/houses/{h}/scores", data={"visitada": "1"}, headers=JSON).json()
-    assert s["visit"] == "visitadas"
+    assert ana.post("/houses/999/stage", data={"stage": "visitada"}).status_code == 404
+    assert ana.post(f"/houses/{h}/stage", data={"stage": "hack"}).status_code == 400
+
+
+def test_visited_is_a_stage_not_a_scores_field(users):
+    ana, _ = users
+    h = add_house(ana)
+    # The old "¿La visitamos?" switch is gone, and the scores form no longer changes it.
+    page = ana.get(f"/houses/{h}").text
+    assert 'name="visitada"' not in page and "¿La visitamos?" not in page
+    ana.post(f"/houses/{h}/scores", data={"visitada": "1"})
     with db.session() as c:
-        assert c.execute("SELECT a_visitar FROM houses WHERE id = ?", (h,)).fetchone()[0] == 0
-    # A visited house has no "Ir a visitar" button any more.
-    assert 'class="to-visit-form"' not in ana.get(f"/houses/{h}").text
+        assert c.execute("SELECT stage FROM houses WHERE id = ?", (h,)).fetchone()[0] == "ninguna"
 
 
 def test_old_visited_links_still_work(users):
     ana, _ = users
     v = add_house(ana, title="Fuimos")
     add_house(ana, title="Online")
-    ana.post(f"/houses/{v}/scores", data={"visitada": "1"})
+    set_stage(ana, v, "visitada")
     assert _titles(ana.get("/?visitada=si").text) == ["Fuimos"]
     assert _titles(ana.get("/?visitada=no").text) == ["Online"]
-
-
-def test_to_visit_unknown_house_404(users):
-    ana, _ = users
-    assert ana.post("/houses/999/a-visitar").status_code == 404
 
 
 # --- filters ---------------------------------------------------------------------
@@ -529,7 +535,7 @@ def test_filter_by_score_and_stars(users):
     assert "Filtros (1)" in page and "Limpiar filtros" in page
     # A filtered house keeps its overall rank number.
     page = ana.get("/?min_ubicacion=7&min_construccion=7").text
-    assert re.search(r'rank-(\d+)" data-visit[^>]*>(?:(?!</li>).)*En pesos', page, re.S).group(1) == "2"
+    assert re.search(r'rank-(\d+)" data-stage[^>]*>(?:(?!</li>).)*En pesos', page, re.S).group(1) == "2"
 
 
 def test_filter_by_features_and_price(users):
@@ -548,13 +554,13 @@ def test_filter_by_features_and_price(users):
 def test_filters_combine_with_tabs_and_pending(users):
     ana, beto = users
     a, b, _ = _filter_houses(ana, beto)
-    ana.post(f"/houses/{b}/a-visitar", data={"on": "1"})
+    set_stage(ana, b, "a_visitar")
     assert _titles(ana.get("/?tab=a_visitar&has=pileta").text) == ["Barata con pileta"]
     assert _titles(ana.get("/?tab=a_visitar&min_score=8").text) == []
     page = ana.get("/?min_score=8").text
     # Tab links keep the filters; counts follow them.
-    assert 'href="/?min_score=8&amp;tab=visitadas"' in page
-    assert re.search(r'class="tab tab-todas"[^>]*>\s*[^<]+<span class="tab-n">1</span>', page)
+    assert 'href="/?min_score=8&amp;tab=visitada"' in page
+    assert re.search(r'class="tab tab-todas st-todas"[^>]*>[^<]+<span class="tab-n">1</span>', page)
     beto.post(f"/houses/{a}/scores", data=stars(3, **dict.fromkeys(db.TOPICS, 8)))
     assert _titles(beto.get("/?pending=1").text) == ["En pesos", "Barata con pileta", "Sin puntuar"]
 
@@ -585,7 +591,7 @@ def test_comment_kind_defaults(users):
     ana, _ = users
     h = add_house(ana)
     assert 'id="ck_online" name="kind" value="online" checked' in ana.get(f"/houses/{h}").text
-    ana.post(f"/houses/{h}/scores", data={"visitada": "1"})
+    set_stage(ana, h, "visitada")
     assert 'id="ck_visita" name="kind" value="visita" checked' in ana.get(f"/houses/{h}").text
     ana.post(f"/houses/{h}/comments", data={"body": "x", "kind": "hack"})
     with db.session() as c:
@@ -633,10 +639,10 @@ def test_export_includes_comments_and_people(users):
     h = add_house(ana, title="Exportada")
     ana.post(f"/houses/{h}/scores", data=stars(2, ubicacion=8))
     beto.post(f"/houses/{h}/comments", data={"body": "linda", "kind": "visita"})
-    ana.post(f"/houses/{h}/a-visitar", data={"on": "1"})
+    set_stage(ana, h, "a_visitar")
     row = ana.get("/export.json").json()[0]
     assert row["comments"][0]["author"] == "Beto" and row["comments"][0]["kind"] == "visita"
-    assert row["Ana_score"] == 5.92 and row["a_visitar"] is True and "questions_score" in row
+    assert row["Ana_score"] == 5.92 and row["stage"] == "a_visitar" and "questions_score" in row
     assert "Beto (visita): linda" in ana.get("/export.csv").text
 
 
@@ -644,9 +650,9 @@ def test_compare_shows_people_and_visit_state(users):
     ana, beto = users
     h = add_house(ana)
     ana.post(f"/houses/{h}/scores", data=stars(2, ubicacion=8))
-    ana.post(f"/houses/{h}/a-visitar", data={"on": "1"})
+    set_stage(ana, h, "a_visitar")
     page = ana.get("/compare").text
-    assert "<th title=\"Opinión de cada uno\">Ana</th>" in page and "visit-a_visitar" in page
+    assert "<th title=\"Opinión de cada uno\">Ana</th>" in page and 'st-a_visitar" title="Sin contactar"' in page
 
 
 def test_settings_show_topic_shares_and_questions_share(admin):
@@ -689,6 +695,8 @@ def test_migration_v5_clears_old_mejorable_answers(env, monkeypatch):
         c.execute("ALTER TABLE ratings DROP COLUMN mejorable")
         c.execute("ALTER TABLE ratings DROP COLUMN me_gusta")
         c.execute("DROP TABLE visits")
+        c.execute("ALTER TABLE houses DROP COLUMN stage")
+        c.execute("ALTER TABLE houses DROP COLUMN contactada")
         c.execute("PRAGMA user_version = 5")
     load_app(monkeypatch)
     with db.session() as c:
@@ -696,7 +704,7 @@ def test_migration_v5_clears_old_mejorable_answers(env, monkeypatch):
         assert h["mejorable"] is None and h["pileta"] == 1
         assert db.get_setting(c, "importance_mejorable") == ""
         assert {"mejorable", "me_gusta"} <= {r[1] for r in c.execute("PRAGMA table_info(ratings)")}
-        assert c.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert c.execute("PRAGMA user_version").fetchone()[0] == 9
 
 
 def test_saving_weights_keeps_new_topic_defaults(admin):
@@ -815,3 +823,144 @@ def test_calendar_in_navigation(users):
     ana, _ = users
     page = ana.get("/").text
     assert page.count('href="/calendar"') == 2  # top nav and phone tab bar
+
+
+# --- stages: to visit, contacted, visit booked, visited ----------------------------
+
+
+def _stages(page):
+    """{card title: data-stage} for the ranking cards."""
+    cards = re.findall(r'data-stage="(\w+)">\s*<a class="card-link" href="/houses/\d+" aria-label="([^"]+)"', page)
+    return {title: st for st, title in cards}
+
+
+def test_stage_changes_through_the_menu_only(users, frozen):
+    ana, _ = users
+    h = add_house(ana, title="Casa")
+    page = ana.get("/").text
+    # No "next step" buttons that could be mistaken for the current stage: only the menu changes it.
+    assert "next-step" not in page and "Ya contactamos" not in page and "La visitamos" not in page
+    assert page.count('class="stage-form menu"') == 1
+    for stage in ("a_visitar", "contactada"):
+        set_stage(ana, h, stage)
+        assert _stages(ana.get("/").text) == {"Casa": stage}
+    # Booking a day is what makes it "agendada"; the label says when.
+    add_visit(ana, h, day="2026-10-30", time="18:00")
+    page = ana.get("/").text
+    assert _stages(page) == {"Casa": "agendada"}
+    assert '<span class="ribbon st-agendada">📅 Vie 30/10, 18:00</span>' in page
+    set_stage(ana, h, "visitada")
+    assert _stages(ana.get("/").text) == {"Casa": "visitada"}
+
+
+def test_status_is_at_the_top_of_the_house_page(users):
+    ana, _ = users
+    h = add_house(ana)
+    page = ana.get(f"/houses/{h}").text
+    # Activa / Favorita / Descartada sit above the photo details, before the scores form, but save with it.
+    assert page.index('class="seg status-seg top"') < page.index('<form id="scores"')
+    assert 'type="radio" form="scores" id="st_favorita" name="status" value="favorita"' in page
+    ana.post(f"/houses/{h}/scores", data={"status": "descartada"})
+    assert 'id="st_descartada" name="status" value="descartada" checked' in ana.get(f"/houses/{h}").text
+
+
+def test_booking_needs_a_day(users):
+    ana, _ = users
+    h = add_house(ana)
+    # "Visita agendada" without a visit in the calendar opens the calendar for that house.
+    r = set_stage(ana, h, "agendada", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == f"/calendar?house={h}#visit-form"
+    assert set_stage(ana, h, "agendada", headers=JSON).json() == {"redirect": f"/calendar?house={h}#visit-form"}
+    with db.session() as c:
+        assert c.execute("SELECT stage FROM houses WHERE id = ?", (h,)).fetchone()[0] == "ninguna"
+
+
+def test_calendar_moves_the_stage(users, frozen):
+    ana, _ = users
+    a, b = add_house(ana, title="A"), add_house(ana, title="B")
+    set_stage(ana, a, "contactada")
+    add_visit(ana, a)
+    assert _stages(ana.get("/").text) == {"A": "agendada", "B": "ninguna"}
+    # Moving the visit to another house: the first one has no visit left, back to "contactada".
+    with db.session() as c:
+        vid = c.execute("SELECT id FROM visits").fetchone()[0]
+    ana.post(f"/visits/{vid}", data={"house_id": b, "day": "2026-10-31", "time": "11:00"})
+    assert _stages(ana.get("/").text) == {"A": "contactada", "B": "agendada"}
+    # Deleting it: same.
+    ana.post(f"/visits/{vid}/delete")
+    assert _stages(ana.get("/").text) == {"A": "contactada", "B": "contactada"}
+    # A visit for a house already visited doesn't move it back.
+    set_stage(ana, a, "visitada")
+    add_visit(ana, a)
+    assert _stages(ana.get("/").text)["A"] == "visitada"
+
+
+def test_past_visit_asks_if_you_went(users, frozen):
+    ana, _ = users
+    h = add_house(ana, title="Casa")
+    add_visit(ana, h, day="2026-10-20", time="10:00")
+    page = ana.get("/").text
+    assert _stages(page) == {"Casa": "agendada"}
+    assert '<span class="ribbon st-agendada past">📅 ¿Fueron? Mar 20/10, 10:00</span>' in page
+    # A later visit takes over.
+    add_visit(ana, h, day="2026-11-02", time="09:00")
+    assert '<span class="ribbon st-agendada">📅 Lun 02/11, 09:00</span>' in ana.get("/").text
+
+
+def test_stage_menu_lists_every_stage(users):
+    ana, _ = users
+    h = add_house(ana)
+    page = ana.get(f"/houses/{h}").text
+    assert 'class="detail-head" data-stage="ninguna"' in page
+    menu = re.search(r'<form class="stage-form menu".*?</form>', page, re.S).group(0)
+    assert re.findall(r'name="stage" value="(\w+)"', menu) == list(db.STAGES)
+
+
+def test_migration_v9_one_stage_from_the_switches(env, monkeypatch):
+    load_app(monkeypatch)
+    with db.session() as c:
+        c.executescript("""
+            INSERT INTO houses (id, title, visitada, a_visitar, contactada) VALUES
+                (1, 'Fuimos', 1, 0, 1), (2, 'Con visita', 0, 1, 1), (3, 'Llamamos', 0, 1, 1),
+                (4, 'Quiero ir', 0, 1, 0), (5, 'Nada', 0, 0, 0);
+            INSERT INTO visits (house_id, day, time) VALUES (2, '2026-10-01', '10:00');
+            ALTER TABLE houses DROP COLUMN stage;
+            PRAGMA user_version = 8;
+        """)
+    load_app(monkeypatch)
+    with db.session() as c:
+        assert dict(c.execute("SELECT id, stage FROM houses").fetchall()) == {
+            1: "visitada", 2: "agendada", 3: "contactada", 4: "a_visitar", 5: "ninguna"}
+        assert c.execute("PRAGMA user_version").fetchone()[0] == 9
+
+
+def test_old_switches_follow_the_stage(users):
+    """So going back to an older version of the app still shows the right thing."""
+    ana, _ = users
+    h = add_house(ana)
+    expected = {"ninguna": (0, 0, 0), "a_visitar": (0, 1, 0), "contactada": (0, 1, 1), "visitada": (1, 0, 0)}
+    for stage, flags in expected.items():
+        set_stage(ana, h, stage)
+        with db.session() as c:
+            assert tuple(c.execute("SELECT visitada, a_visitar, contactada FROM houses WHERE id = ?", (h,)).fetchone()) == flags
+
+
+def test_active_filters_show_as_removable_chips(users):
+    ana, beto = users
+    _filter_houses(ana, beto)
+    page = ana.get("/?tab=a_visitar&min_score=7&has=pileta&has=colegio").text
+    chips = dict((label.split(" <span")[0].strip(), href.replace("&amp;", "&"))
+                 for href, label in re.findall(r'<a class="achip" href="([^"]+)"[^>]*>(.*?)</a>', page, re.S))
+    # Removing one filter keeps the tab and the other filters.
+    assert chips["Puntaje ≥ 7"] == "/?tab=a_visitar&has=pileta&has=colegio"
+    assert chips["✓ Pileta"] == "/?tab=a_visitar&min_score=7&has=colegio"
+    assert 'class="achip clear" href="/?tab=a_visitar"' in page
+    assert 'class="achip"' not in ana.get("/").text
+
+
+def test_feature_tags_only_on_the_house_page(users):
+    ana, _ = users
+    h = add_house(ana, title="Con pileta")
+    ana.post(f"/houses/{h}/scores", data={"pileta": "1"})
+    assert 'class="chip' not in ana.get("/").text.split('<ol class="cards">', 1)[1]
+    assert 'id="pileta_yes" name="pileta" value="1" checked' in ana.get(f"/houses/{h}").text

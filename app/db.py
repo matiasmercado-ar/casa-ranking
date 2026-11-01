@@ -16,6 +16,10 @@ AMENITIES = NEARBY  # counted in the "Cerca x/7" summary
 STATUSES = ("activa", "favorita", "descartada")
 # Where a comment was made from: looking at the listing online, or after seeing the house in person.
 COMMENT_KINDS = ("online", "visita")
+# Where we are with a house, in the order it happens. The middle three are "ir a visitar":
+# we agreed to go and see it, then called the seller, then booked a day in the calendar.
+STAGES = ("ninguna", "a_visitar", "contactada", "agendada", "visitada")
+TO_VISIT = ("a_visitar", "contactada", "agendada")
 COMMENT_MAX = 2000
 VISIT_NOTES_MAX = 2000
 
@@ -123,6 +127,24 @@ CREATE INDEX visits_day ON visits (day, time);
 CREATE INDEX visits_house ON visits (house_id);
 """
 
+# v8: "contactada", we already called or messaged the seller. A house with a visit in the calendar was contacted.
+MIGRATION_V8 = """
+ALTER TABLE houses ADD COLUMN contactada INTEGER NOT NULL DEFAULT 0;
+UPDATE houses SET contactada = 1 WHERE id IN (SELECT house_id FROM visits);
+"""
+
+# v9: one "stage" per house instead of the visitada / a_visitar / contactada switches (kept in step for rollback).
+MIGRATION_V9 = """
+ALTER TABLE houses ADD COLUMN stage TEXT NOT NULL DEFAULT 'ninguna'
+    CHECK (stage IN ('ninguna', 'a_visitar', 'contactada', 'agendada', 'visitada'));
+UPDATE houses SET stage = CASE
+    WHEN visitada = 1 THEN 'visitada'
+    WHEN id IN (SELECT house_id FROM visits) THEN 'agendada'
+    WHEN contactada = 1 THEN 'contactada'
+    WHEN a_visitar = 1 THEN 'a_visitar'
+    ELSE 'ninguna' END;
+"""
+
 
 def db_path() -> Path:
     return Path(os.environ.get("DATA_DIR", "./data")) / "casa-ranking.db"
@@ -188,6 +210,12 @@ def init() -> str | None:
         if version == 6:
             conn.executescript(MIGRATION_V7)
             version = 7
+        if version == 7:
+            conn.executescript(MIGRATION_V8)
+            version = 8
+        if version == 8:
+            conn.executescript(MIGRATION_V9)
+            version = 9
         conn.execute(f"PRAGMA user_version = {version}")
         return ensure_admin(conn)
 
@@ -215,4 +243,12 @@ def set_setting(conn, key: str, value: str) -> None:
         "INSERT INTO settings (key, value) VALUES (?, ?) "
         "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         (key, value),
+    )
+
+
+def set_stage(conn, house_id: int, stage: str) -> None:
+    """Move a house to a stage. The old switches follow, so an older version of the app still reads it right."""
+    conn.execute(
+        "UPDATE houses SET stage = ?, visitada = ?, a_visitar = ?, contactada = ?, updated_at = datetime('now') WHERE id = ?",
+        (stage, int(stage == "visitada"), int(stage in TO_VISIT), int(stage in ("contactada", "agendada")), house_id),
     )

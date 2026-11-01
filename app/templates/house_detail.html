@@ -1,19 +1,29 @@
 {% extends "base.html" %}
-{% from "_macros.html" import score_badge, bar, price, people_scores, to_visit_button, day_label %}
+{% from "_macros.html" import score_badge, bar, price, people_scores, stage_label, stage_steps, stage_menu, day_label %}
 {% block title %}{{ house.title or t('untitled') }} · {{ t('app_name') }}{% endblock %}
 {% block content %}
 <a class="back" href="/">← {{ t('nav_ranking') }}</a>
-<section class="detail-head">
-  <div class="detail-photo">{% if house.image_url %}<img src="{{ house.image_url }}" alt="" referrerpolicy="no-referrer">{% else %}<span>🏠</span>{% endif %}</div>
+<section class="detail-head" data-stage="{{ stage }}">
+  <div class="detail-photo">{% if house.image_url %}<img src="{{ house.image_url }}" alt="" referrerpolicy="no-referrer">{% else %}<span>🏠</span>{% endif %}{{ stage_label(t, sv) }}</div>
   <div class="detail-info">
     <h1>{{ house.title or t('untitled') }}</h1>
+    <div class="stage-bar">
+      <span class="stage-now">{{ stage_label(t, sv) }}{{ stage_steps(t) }}</span>
+      {{ stage_menu(t, house) }}
+    </div>
+    {# Activa / Favorita / Descartada: up here to be easy to reach; part of the autosaved scores form below. #}
+    <div class="seg status-seg top" role="radiogroup" aria-label="{{ t('status') }}">
+      {% for s in STATUSES %}
+      <input type="radio" form="scores" id="st_{{ s }}" name="status" value="{{ s }}" {% if house.status == s %}checked{% endif %}>
+      <label for="st_{{ s }}" class="{{ s }}">{{ '★ ' if s == 'favorita' else '🗑 ' if s == 'descartada' else '' }}{{ t(s) }}</label>
+      {% endfor %}
+    </div>
     <p class="muted">{{ house.address }}{% if house.address and house.price is not none %} · {% endif %}<strong>{{ price(house) }}</strong></p>
     <div class="actions wrap-row">
       {% if house.url %}<a class="btn primary" href="{{ house.url }}" target="_blank" rel="noopener noreferrer">{{ t('open_listing') }} ↗</a>{% endif %}
       {% if house.lat is not none and house.lng is not none %}{% set maps = 'https://www.google.com/maps/search/?api=1&query=%s,%s'|format(house.lat, house.lng) %}
       {% elif house.address %}{% set maps = 'https://www.google.com/maps/search/?api=1&query=' ~ house.address|urlencode %}{% endif %}
       {% if maps %}<a class="btn" href="{{ maps }}" target="_blank" rel="noopener noreferrer">📍 {{ t('open_map') }}</a>{% endif %}
-      {% if not house.visitada %}{{ to_visit_button(t, house) }}{% endif %}
       <a class="btn" href="/calendar?house={{ house.id }}#visit-form">📅 {{ t('schedule_visit') }}</a>
       <a class="btn" href="/houses/{{ house.id }}/edit">{{ t('edit') }}</a>
       {% if house.url %}<form method="post" action="/houses/{{ house.id }}/refresh-preview" data-busy="{{ t('importing') }}"><button class="btn ghost">↻ {{ t('refresh_preview') }}</button></form>{% endif %}
@@ -37,16 +47,6 @@
 
 <div class="detail-cols">
 <form id="scores" class="panel" method="post" action="/houses/{{ house.id }}/scores" data-saved="{{ t('saved') }}">
-  <label class="visit-toggle">
-    <input type="checkbox" name="visitada" value="1" {% if house.visitada %}checked{% endif %}>
-    <span class="visit-switch" aria-hidden="true"></span>
-    <span class="visit-text">
-      <strong class="visit-yes">✓ {{ t('visitada') }}</strong>
-      <strong class="visit-no">{{ t('visitada_q') }}</strong>
-      <small class="muted">{{ t('visitada_hint') }}</small>
-    </span>
-  </label>
-
   <div class="panel-head">
     <h2>{{ t('ratings') }}</h2>
     <span class="save-state small muted" aria-live="polite"></span>
@@ -106,14 +106,6 @@
     {% endfor %}
   </div>
   {% endfor %}
-
-  <h2>{{ t('status') }}</h2>
-  <div class="seg status-seg">
-    {% for s in STATUSES %}
-    <input type="radio" id="st_{{ s }}" name="status" value="{{ s }}" {% if house.status == s %}checked{% endif %}>
-    <label for="st_{{ s }}" class="{{ s }}">{{ t(s) }}</label>
-    {% endfor %}
-  </div>
 
   <noscript><div class="actions"><button class="btn primary">{{ t('save') }}</button></div></noscript>
 </form>

@@ -32,20 +32,34 @@
 {%- endif -%}
 {%- endmacro %}
 
-{# All three are rendered; CSS shows the one matching the card's data-visit, so JS can switch it. #}
-{% macro ribbon(t, visit) -%}
-<span class="ribbon visited">✓ {{ t('visitada') }}</span><span class="ribbon to-visit">📍 {{ t('a_visitar') }}</span><span class="ribbon not-visited">✗ {{ t('not_visited') }}</span>
+{# Stage widgets. Every variant is rendered and CSS shows the one matching the nearest data-stage,
+   so app.js only has to change that attribute. sv: the house's visit to show (next one, else last one). #}
+{% macro stage_label(t, sv=none) -%}
+<span class="ribbon st-ninguna">{{ t('stage_ninguna') }}</span>
+<span class="ribbon st-a_visitar">📍 {{ t('stage_a_visitar') }}</span>
+<span class="ribbon st-contactada">📞 {{ t('stage_contactada') }}</span>
+<span class="ribbon st-agendada{% if sv and sv.past %} past{% endif %}">📅 {% if sv %}{% if sv.past %}{{ t('stage_went_q') }} {% endif %}{{ day_label(t, sv.date) }}, {{ sv.time }}{% else %}{{ t('stage_agendada') }}{% endif %}</span>
+<span class="ribbon st-visitada">✓ {{ t('stage_visitada') }}</span>
 {%- endmacro %}
 
-{% macro to_visit_button(t, h, small=false) -%}
-<form class="to-visit-form" method="post" action="/houses/{{ h.id }}/a-visitar">
-  <input type="hidden" name="on" value="{{ 0 if h.a_visitar else 1 }}">
-  <button class="btn to-visit{% if small %} small{% endif %}{% if h.a_visitar %} on{% endif %}" aria-pressed="{{ 'true' if h.a_visitar else 'false' }}"
-          data-on="📍 {{ t('a_visitar_on') }}" data-off="📍 {{ t('a_visitar') }}"
-          title="{{ t('a_visitar_remove') if h.a_visitar else t('a_visitar_add') }}"
-          data-title-on="{{ t('a_visitar_remove') }}" data-title-off="{{ t('a_visitar_add') }}">
-    📍 {{ t('a_visitar_on') if h.a_visitar else t('a_visitar') }}</button>
-</form>
+{# "Ir a visitar" is three steps: sin contactar, contactada, agendada. #}
+{% macro stage_steps(t) -%}
+<span class="steps" title="{{ t('group_ir') }}"><span class="steps-label">{{ t('group_ir') }}</span><i></i><i></i><i></i></span>
+{%- endmacro %}
+
+{# Any stage, forwards or back. #}
+{% macro stage_menu(t, h, small=false) -%}
+<details class="stage-menu">
+  <summary class="btn ghost{{ ' small' if small }}" title="{{ t('change_stage') }}">{{ t('change_stage') }} <span aria-hidden="true">▾</span></summary>
+  <form class="stage-form menu" method="post" action="/houses/{{ h.id }}/stage" role="menu">
+    <button class="mi st-ninguna" name="stage" value="ninguna" role="menuitemradio"><i class="dot"></i>{{ t('stage_ninguna') }}</button>
+    <span class="menu-sep">{{ t('group_ir') }}</span>
+    <button class="mi sub st-a_visitar" name="stage" value="a_visitar" role="menuitemradio"><i class="dot"></i>{{ t('stage_a_visitar') }}</button>
+    <button class="mi sub st-contactada" name="stage" value="contactada" role="menuitemradio"><i class="dot"></i>{{ t('stage_contactada') }}</button>
+    <button class="mi sub st-agendada" name="stage" value="agendada" role="menuitemradio"><i class="dot"></i>{{ t('stage_agendada') }}</button>
+    <button class="mi st-visitada" name="stage" value="visitada" role="menuitemradio"><i class="dot"></i>{{ t('stage_visitada') }}</button>
+  </form>
+</details>
 {%- endmacro %}
 
 {% macro day_label(t, d) -%}

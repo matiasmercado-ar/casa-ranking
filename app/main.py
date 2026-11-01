@@ -18,12 +18,12 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import db, linkpreview
-from .db import (AMENITIES, COMMENT_KINDS, COMMENT_MAX, FEATURES, HOUSE_QUESTIONS, NEARBY, STATUSES, TOPICS,
-                 VISIT_NOTES_MAX)
+from .db import (AMENITIES, COMMENT_KINDS, COMMENT_MAX, FEATURES, HOUSE_QUESTIONS, NEARBY, STAGES, STATUSES, TO_VISIT,
+                 TOPICS, VISIT_NOTES_MAX)
 from .i18n import DEFAULT_LANG, LANGS, translate
 from .scoring import DEFAULT_WEIGHTS, IMPORTANCE, house_scores, ranking, topic_shares, weights
 
-__version__ = "1.6.0"
+__version__ = "2.0.0"
 BASE = Path(__file__).parent
 CURRENCIES = ("USD", "ARS")
 MIN_PASSWORD = 8
@@ -150,13 +150,28 @@ def healthz():
     return {"ok": True, "version": __version__}
 
 
-# Ranking tabs. They split the houses with no overlap: Todas = the other three together.
-TABS = ("todas", "visitadas", "a_visitar", "sin_visitar")
 MIN_CHOICES = (5, 6, 7, 8, 9)
 
+# Ranking tabs in the order things happen. "ir" is the three "ir a visitar" stages together.
+TABS = ("todas", "ninguna", "ir", "a_visitar", "contactada", "agendada", "visitada")
+# Tab names from before (old bookmarks and links).
+OLD_TABS = {"visitadas": "visitada", "sin_visitar": "ninguna"}
 
-def visit_state(h) -> str:
-    return "visitadas" if h["visitada"] else "a_visitar" if h["a_visitar"] else "sin_visitar"
+
+def in_tab(stage: str, tab: str) -> bool:
+    return tab == "todas" or stage == tab or (tab == "ir" and stage in TO_VISIT)
+
+
+def _stage_visits(conn) -> dict[int, dict]:
+    """Each house's visit to show with its stage: the next one, else the last one (then past=True)."""
+    now = _now_key()
+    out: dict[int, dict] = {}
+    # Oldest first: a later past visit replaces an earlier one, the first upcoming one replaces any past one and stays.
+    for v in conn.execute("SELECT * FROM visits ORDER BY day, time"):
+        cur = out.get(v["house_id"])
+        if cur is None or cur["past"]:
+            out[v["house_id"]] = {**_visit(v), "past": f"{v['day']} {v['time']}" < now}
+    return out
 
 
 def _int(value: str, lo: int, hi: int) -> int | None:
@@ -203,7 +218,8 @@ def _passes(r: dict, f: dict) -> bool:
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request, all: int = 0, tab: str = "todas", visitada: str = ""):
     if visitada in ("si", "no"):  # old links from before the tabs
-        tab = "visitadas" if visitada == "si" else "sin_visitar"
+        tab = "visitada" if visitada == "si" else "ninguna"
+    tab = OLD_TABS.get(tab, tab)
     tab = tab if tab in TABS else "todas"
     filters = _filters(request)
     with db.session() as conn:
@@ -211,23 +227,45 @@ def index(request: Request, all: int = 0, tab: str = "todas", visitada: str = ""
         raters = _raters(conn)
         discarded = conn.execute("SELECT COUNT(*) FROM houses WHERE status = 'descartada'").fetchone()[0]
         comments = dict(conn.execute("SELECT house_id, COUNT(*) FROM comments GROUP BY house_id").fetchall())
-        next_visit = _next_visits(conn)
+        stage_visit = _stage_visits(conn)
     me = request.state.user
     for r in rows:
-        r["next_visit"] = next_visit.get(r["house"]["id"])
+        r["sv"] = stage_visit.get(r["house"]["id"])
         mine = r["ratings"].get(me["id"])
         r["pending_me"] = bool(me["can_rate"]) and (mine is None or any(mine[t] is None for t in TOPICS))
-        r["visit"] = visit_state(r["house"])
+        r["stage"] = r["house"]["stage"]
         r["comments"] = comments.get(r["house"]["id"], 0)
     # Filter after numbering so a house keeps its overall position.
     rows = [r for r in rows if _passes(r, filters)]
-    counts = {t: sum(1 for r in rows if t == "todas" or r["visit"] == t) for t in TABS}
-    if tab != "todas":
-        rows = [r for r in rows if r["visit"] == tab]
+    counts = {t: sum(1 for r in rows if in_tab(r["stage"], t)) for t in TABS}
+    rows = [r for r in rows if in_tab(r["stage"], tab)]
     # Query string of the current filters, kept when switching tabs.
     keep = [(k, v) for k, v in request.query_params.multi_items() if k not in ("tab", "all", "visitada") and v != ""]
     return render(request, "index.html", rows=rows, show_all=bool(all), raters=raters, discarded=discarded,
-                  tab=tab, tabs=TABS, counts=counts, filters=filters, keep=keep, MIN_CHOICES=MIN_CHOICES)
+                  tab=tab, tabs=TABS, counts=counts, filters=filters, keep=keep, MIN_CHOICES=MIN_CHOICES,
+                  chips=_active_chips(request, filters))
+
+
+def _active_chips(request: Request, f: dict) -> list[dict]:
+    """One removable chip per active filter: what it is, and the link that drops just that filter."""
+    items = request.query_params.multi_items()
+
+    def without(*drop):
+        q = [(k, v) for k, v in items if (k, v) not in drop and k not in [d[0] for d in drop if d[1] is None] and v != ""]
+        return "/" + ("?" + urlencode(q) if q else "")
+
+    chips = []
+    if f["min_score"] is not None:
+        chips.append({"kind": "min_score", "value": f["min_score"], "href": without(("min_score", None))})
+    for t_, v in f["min"].items():
+        chips.append({"kind": "min_topic", "topic": t_, "value": v, "href": without((f"min_{t_}", None))})
+    for x in f["has"]:
+        chips.append({"kind": "has", "feature": x, "href": without(("has", x))})
+    if f["price_min"] is not None or f["price_max"] is not None:
+        chips.append({"kind": "price", "href": without(("price_min", None), ("price_max", None), ("currency", None))})
+    if f["pending"]:
+        chips.append({"kind": "pending", "href": without(("pending", None))})
+    return chips
 
 
 @app.get("/compare", response_class=HTMLResponse)
@@ -237,7 +275,7 @@ def compare(request: Request):
         raters = _raters(conn)
         comments = dict(conn.execute("SELECT house_id, COUNT(*) FROM comments GROUP BY house_id").fetchall())
     for r in rows:
-        r["visit"] = visit_state(r["house"])
+        r["stage"] = r["house"]["stage"]
         r["comments"] = comments.get(r["house"]["id"], 0)
     return render(request, "compare.html", rows=rows, raters=raters)
 
@@ -332,15 +370,16 @@ def house_detail(request: Request, house_id: int, c: str = ""):
         visits = [_visit(v) for v in conn.execute(
             "SELECT * FROM visits WHERE house_id = ? AND day || ' ' || time >= ? ORDER BY day, time",
             (house_id, _now_key()))]
+        sv = _stage_visits(conn).get(house_id)
     # The logged-in user's row first: it is the only one they can edit.
     me = request.state.user
     raters = sorted(raters, key=lambda r: r["id"] != me["id"])
     return render(request, "house_detail.html", house=h, raters=raters, by_rater=scores["ratings"], scores=scores, w=w,
-                  comments=comments, visit=visit_state(h), visits=visits,
+                  comments=comments, stage=h["stage"], sv=sv, visits=visits,
                   # Comment list filter (all / one kind) and the kind preselected for a new comment:
                   # the last one used, else "in person" once the house has been visited.
                   show_kind=c if c in COMMENT_KINDS else "todos",
-                  write_kind=c if c in COMMENT_KINDS else "visita" if h["visitada"] else "online")
+                  write_kind=c if c in COMMENT_KINDS else "visita" if h["stage"] == "visitada" else "online")
 
 
 def _comments(conn, house_id: int):
@@ -435,20 +474,16 @@ async def save_scores(request: Request, house_id: int):
                 (house_id, me["id"], *[values[t] for t in TOPICS]),
             )
         status = form.get("status")
-        visited = 1 if form.get("visitada") == "1" else 0
-        # Once visited it is no longer "to visit".
         conn.execute(
-            f"UPDATE houses SET {', '.join(f'{f} = ?' for f in FEATURES)}, visitada = ?, status = ?, "
-            f"a_visitar = CASE WHEN ? THEN 0 ELSE a_visitar END, updated_at = datetime('now') WHERE id = ?",
-            (*[_tri(form.get(f)) for f in FEATURES], visited,
-             status if status in STATUSES else h["status"], visited, house_id),
+            f"UPDATE houses SET {', '.join(f'{f} = ?' for f in FEATURES)}, status = ?, updated_at = datetime('now') WHERE id = ?",
+            (*[_tri(form.get(f)) for f in FEATURES], status if status in STATUSES else h["status"], house_id),
         )
         h = _house_or_404(conn, house_id)
         rows = conn.execute("SELECT * FROM ratings WHERE house_id = ?", (house_id,)).fetchall()
         scores = house_scores(h, rows, weights(conn))
     if request.headers.get("accept") == "application/json":
         scores.pop("ratings")
-        return JSONResponse({**scores, "visit": visit_state(h)})
+        return JSONResponse(scores)
     return RedirectResponse(f"/houses/{house_id}", status_code=303)
 
 
@@ -460,16 +495,24 @@ def _back_to(request: Request, fallback: str) -> str:
     return fallback
 
 
-@app.post("/houses/{house_id}/a-visitar")
-def toggle_to_visit(request: Request, house_id: int, on: str = Form("")):
-    """'Ir a visitar': put a house on (on=1) or off (on=0) the list of houses to go and see."""
+def _schedule_url(house_id: int) -> str:
+    return f"/calendar?house={house_id}#visit-form"
+
+
+@app.post("/houses/{house_id}/stage")
+def set_house_stage(request: Request, house_id: int, stage: str = Form("")):
+    """Move a house to a stage. "Visita agendada" needs a day: without a visit in the calendar it opens the calendar."""
+    json = request.headers.get("accept") == "application/json"
     with db.session() as conn:
-        h = _house_or_404(conn, house_id)
-        value = 1 if on == "1" else 0 if on == "0" else int(not h["a_visitar"])
-        conn.execute("UPDATE houses SET a_visitar = ?, updated_at = datetime('now') WHERE id = ?", (value, house_id))
-        h = _house_or_404(conn, house_id)
-    if request.headers.get("accept") == "application/json":
-        return JSONResponse({"a_visitar": bool(h["a_visitar"]), "visit": visit_state(h)})
+        _house_or_404(conn, house_id)
+        if stage not in STAGES:
+            raise HTTPException(400)
+        if stage == "agendada" and not conn.execute("SELECT 1 FROM visits WHERE house_id = ?", (house_id,)).fetchone():
+            return JSONResponse({"redirect": _schedule_url(house_id)}) if json else \
+                RedirectResponse(_schedule_url(house_id), status_code=303)
+        db.set_stage(conn, house_id, stage)
+    if json:
+        return JSONResponse({"stage": stage})
     return RedirectResponse(_back_to(request, f"/houses/{house_id}"), status_code=303)
 
 
@@ -530,14 +573,6 @@ VISIT_SELECT = ("SELECT v.*, h.title, h.address, u.name AS author FROM visits v 
                 "JOIN houses h ON h.id = v.house_id LEFT JOIN users u ON u.id = v.user_id ")
 
 
-def _next_visits(conn) -> dict[int, dict]:
-    """Each house's next visit from now on."""
-    out: dict[int, dict] = {}
-    for v in conn.execute("SELECT * FROM visits WHERE day || ' ' || time >= ? ORDER BY day, time", (_now_key(),)):
-        out.setdefault(v["house_id"], _visit(v))
-    return out
-
-
 def _cal_url(day: date, anchor: str = "") -> str:
     return f"/calendar?m={day:%Y-%m}&d={day.isoformat()}{anchor}"
 
@@ -589,6 +624,20 @@ def _visit_form(conn, house_id: int, day: str, time_: str, notes: str):
     return house_id, when, hhmm, notes.strip()[:VISIT_NOTES_MAX]
 
 
+def _visit_booked(conn, house_id: int) -> None:
+    """A day in the calendar: the house is "visita agendada" (unless it was already visited)."""
+    if conn.execute("SELECT stage FROM houses WHERE id = ?", (house_id,)).fetchone()["stage"] != "visitada":
+        db.set_stage(conn, house_id, "agendada")
+
+
+def _visit_gone(conn, house_id: int) -> None:
+    """Its last visit left the calendar: a booked house goes back to "contactada"."""
+    row = conn.execute("SELECT stage FROM houses WHERE id = ?", (house_id,)).fetchone()
+    if row and row["stage"] == "agendada" and not conn.execute(
+            "SELECT 1 FROM visits WHERE house_id = ?", (house_id,)).fetchone():
+        db.set_stage(conn, house_id, "contactada")
+
+
 @app.post("/visits")
 def create_visit(request: Request, house_id: int = Form(0), day: str = Form(""), time_: str = Form("", alias="time"),
                  notes: str = Form("")):
@@ -599,6 +648,7 @@ def create_visit(request: Request, house_id: int = Form(0), day: str = Form(""),
             return RedirectResponse(f"/calendar?{urlencode({'house': house_id, 'd': day})}#visit-form", status_code=303)
         conn.execute("INSERT INTO visits (house_id, user_id, day, time, notes) VALUES (?, ?, ?, ?, ?)",
                      (v[0], request.state.user["id"], v[1].isoformat(), v[2], v[3]))
+        _visit_booked(conn, v[0])
     flash(request, "ok", "msg_visit_added")
     return RedirectResponse(_cal_url(v[1], "#day"), status_code=303)
 
@@ -607,7 +657,8 @@ def create_visit(request: Request, house_id: int = Form(0), day: str = Form(""),
 def update_visit(request: Request, visit_id: int, house_id: int = Form(0), day: str = Form(""),
                  time_: str = Form("", alias="time"), notes: str = Form("")):
     with db.session() as conn:
-        if not conn.execute("SELECT 1 FROM visits WHERE id = ?", (visit_id,)).fetchone():
+        old = conn.execute("SELECT house_id FROM visits WHERE id = ?", (visit_id,)).fetchone()
+        if not old:
             raise HTTPException(404)
         v = _visit_form(conn, house_id, day, time_, notes)
         if v is None:
@@ -615,6 +666,9 @@ def update_visit(request: Request, visit_id: int, house_id: int = Form(0), day: 
             return RedirectResponse(f"/calendar?edit={visit_id}#visit-form", status_code=303)
         conn.execute("UPDATE visits SET house_id = ?, day = ?, time = ?, notes = ? WHERE id = ?",
                      (v[0], v[1].isoformat(), v[2], v[3], visit_id))
+        _visit_booked(conn, v[0])
+        if old["house_id"] != v[0]:
+            _visit_gone(conn, old["house_id"])
     flash(request, "ok", "msg_saved")
     return RedirectResponse(_cal_url(v[1], "#day"), status_code=303)
 
@@ -626,6 +680,7 @@ def delete_visit(request: Request, visit_id: int):
         if not v:
             raise HTTPException(404)
         conn.execute("DELETE FROM visits WHERE id = ?", (visit_id,))
+        _visit_gone(conn, v["house_id"])
     flash(request, "ok", "msg_visit_deleted")
     return RedirectResponse(_back_to(request, _cal_url(date.fromisoformat(v["day"]), "#day")), status_code=303)
 
@@ -771,7 +826,7 @@ def _export_rows(conn) -> list[dict]:
         h = row["house"]
         item = {"rank": row["rank"], "id": h["id"], "title": h["title"], "url": h["url"], "address": h["address"],
                 "price": h["price"], "currency": h["currency"], "status": h["status"],
-                "visitada": bool(h["visitada"]), "a_visitar": bool(h["a_visitar"]),
+                "stage": h["stage"], "visitada": h["stage"] == "visitada",
                 "score": round(row["overall"], 2) if row["overall"] is not None else None,
                 "stars_score": round(row["base"], 2) if row["base"] is not None else None,
                 "questions_score": round(row["questions"], 2) if row["questions"] is not None else None}

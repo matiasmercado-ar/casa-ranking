@@ -80,9 +80,6 @@ document.querySelectorAll("form[data-busy]").forEach((form) => {
         el.classList.toggle("missing", v === undefined);
         el.querySelector(".person-val").textContent = v === undefined ? "–" : v.toFixed(1);
       });
-      // Marking it visited takes it off the "to visit" list.
-      document.querySelectorAll(".to-visit-form").forEach((f) => (f.hidden = s.visit === "visitadas"));
-      if (s.visit !== "visitadas") document.querySelectorAll(".to-visit").forEach((b) => paintToVisit(b, s.visit === "a_visitar"));
       const amen = document.getElementById("amen");
       if (amen) amen.textContent = amen.textContent.replace(/\d+\/\d+/, `${s.amenities_yes}/${s.amenities_total}`);
       state.textContent = "✓ " + form.dataset.saved;
@@ -91,44 +88,59 @@ document.querySelectorAll("form[data-busy]").forEach((form) => {
     }
   }
 
-  form.addEventListener("change", (e) => {
+  function changed(e) {
     if (e.target.matches(".stars input")) paintRow(e.target);
     clearTimeout(timer);
     timer = setTimeout(save, 250);
-  });
+  }
+  form.addEventListener("change", changed);
+  // Fields of this form placed elsewhere on the page (form="scores"), like Activa / Favorita / Descartada.
+  document.querySelectorAll('[form="scores"]').forEach((el) => el.addEventListener("change", changed));
 })();
 
-// "Ir a visitar" buttons: toggle in place (cards keep their scroll position); plain POST without JS.
-function paintToVisit(btn, on) {
-  btn.classList.toggle("on", on);
-  btn.setAttribute("aria-pressed", on ? "true" : "false");
-  btn.textContent = on ? btn.dataset.on : btn.dataset.off;
-  btn.title = on ? btn.dataset.titleOn : btn.dataset.titleOff;
-  btn.form.querySelector("[name=on]").value = on ? "0" : "1";
-}
-document.querySelectorAll(".to-visit-form").forEach((form) => {
+// Stage buttons (next step) and the "Cambiar estado" menu: change it in place, keeping the scroll position.
+// Without JS they are plain POST forms. The server answers {stage} or, for a visit with no day yet, {redirect}.
+document.querySelectorAll(".stage-form").forEach((form) => {
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const btn = form.querySelector("button");
-    btn.disabled = true;
+    const btn = e.submitter || form.querySelector("button");
+    const body = new FormData(form);
+    if (btn && btn.name) body.set(btn.name, btn.value);
+    if (btn) btn.disabled = true;
     try {
-      const res = await fetch(form.action, { method: "POST", body: new FormData(form), headers: { Accept: "application/json" } });
+      const res = await fetch(form.action, { method: "POST", body, headers: { Accept: "application/json" } });
       if (!res.ok) throw new Error(res.status);
       const s = await res.json();
-      paintToVisit(btn, s.a_visitar);
-      const card = form.closest(".card");
-      if (card) {
-        card.dataset.visit = s.visit;
+      if (s.redirect) { location.href = s.redirect; return; }
+      const holder = form.closest("[data-stage]") || document.querySelector("[data-stage]");
+      // Every stage widget on the house page follows (photo label, stage bar).
+      (holder.classList.contains("card") ? [holder] : document.querySelectorAll("[data-stage]"))
+        .forEach((el) => (el.dataset.stage = s.stage));
+      form.closest("details")?.removeAttribute("open");
+      if (holder.classList.contains("card")) {
         // On a filtered tab, a house that no longer belongs there is dimmed until the next reload.
-        const tab = new URLSearchParams(location.search).get("tab");
-        card.classList.toggle("left-tab", !!tab && tab !== s.visit);
+        const old = { visitadas: "visitada", sin_visitar: "ninguna" };
+        let tab = new URLSearchParams(location.search).get("tab") || "todas";
+        tab = old[tab] || tab;
+        const inTab = tab === "todas" || tab === s.stage || (tab === "ir" && ["a_visitar", "contactada", "agendada"].includes(s.stage));
+        holder.classList.toggle("left-tab", !inTab);
       }
     } catch (err) {
-      form.submit();
+      // Fall back to a normal POST, keeping which menu item was picked.
+      if (btn && btn.name) {
+        const keep = document.createElement("input");
+        Object.assign(keep, { type: "hidden", name: btn.name, value: btn.value });
+        form.append(keep);
+      }
+      HTMLFormElement.prototype.submit.call(form);
     } finally {
-      btn.disabled = false;
+      if (btn) btn.disabled = false;
     }
   });
+});
+// Close an open stage menu when clicking elsewhere.
+document.addEventListener("click", (e) => {
+  document.querySelectorAll(".stage-menu[open]").forEach((d) => { if (!d.contains(e.target)) d.removeAttribute("open"); });
 });
 
 // Comments: switch between all / online / in person without reloading.
